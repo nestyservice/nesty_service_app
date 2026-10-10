@@ -1,0 +1,32 @@
+{
+  "name": "nesty-web-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Nesty Smart Campus Food Ordering — Full-Stack Responsive Web Application & Shared Android/Web API Backend",
+  "type": "module",
+  "scripts": {
+    "dev:client": "vite --port 5173",
+    "dev:server": "node server/index.js",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "test": "node --test server/api.test.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "lucide-react": "^0.475.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.1",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0"
+  }
+}
