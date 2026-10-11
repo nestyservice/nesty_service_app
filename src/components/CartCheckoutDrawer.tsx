@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
-import { CAMPUS_BLOCKS, CouponRecord, MenuItem, UserAccount } from '../types';
+import { CouponRecord, MenuItem, UserAccount } from '../types';
 import {
   AlertCircle,
   CreditCard,
-  MapPin,
   Minus,
   Plus,
   RefreshCw,
@@ -11,9 +10,7 @@ import {
   ShoppingCart,
   Tag,
   Trash2,
-  Wallet,
   X,
-  Coins,
 } from 'lucide-react';
 
 interface CartCheckoutDrawerProps {
@@ -21,20 +18,31 @@ interface CartCheckoutDrawerProps {
   user: UserAccount;
   menuItems: MenuItem[];
   cartQuantities: Record<string, number>;
-  selectedBlock: string;
   appliedCoupon: CouponRecord | null;
-  redeemCoins: boolean;
   paymentErrorAlert: string | null;
   isProcessingPayment: boolean;
   onUpdateQuantity: (itemId: string, delta: number) => void;
   onClearCart: () => void;
-  onSelectBlock: (blockCode: string) => void;
   onApplyCoupon: (code: string) => void;
   onClearCoupon: () => void;
-  onToggleRedeemCoins: (enabled: boolean) => void;
   onPaySuccess: (paymentMethod: string, transactionId: string, razorpayOrderId?: string) => void;
   onPayFailed: (paymentMethod: string, reason: string) => void;
   onClose: () => void;
+}
+
+// Dynamically load Razorpay SDK script if not already present
+function loadRazorpayScript(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (typeof window !== 'undefined' && (window as unknown as { Razorpay?: unknown }).Razorpay) {
+      resolve(true);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
 }
 
 export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
@@ -42,24 +50,20 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
   user,
   menuItems,
   cartQuantities,
-  selectedBlock,
   appliedCoupon,
-  redeemCoins,
   paymentErrorAlert,
   isProcessingPayment,
   onUpdateQuantity,
   onClearCart,
-  onSelectBlock,
   onApplyCoupon,
   onClearCoupon,
-  onToggleRedeemCoins,
   onPaySuccess,
   onPayFailed,
   onClose,
 }) => {
   const [couponInput, setCouponInput] = useState('');
-  const [showGatewaySheet, setShowGatewaySheet] = useState(false);
-  const [activeGatewayType, setActiveGatewayType] = useState('Razorpay Online Gateway');
+  const [isLaunchingRazorpay, setIsLaunchingRazorpay] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -76,11 +80,173 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
     appliedCoupon && subtotal >= appliedCoupon.minOrderAmount
       ? Math.min(Math.floor((subtotal * appliedCoupon.discountPercent) / 100), appliedCoupon.maxDiscount)
       : 0;
-  const maxCoinsRedeemable = Math.min(20, Math.max(0, subtotal - couponDiscount - 1));
-  const coinsDiscount = redeemCoins ? Math.min(user.coins, maxCoinsRedeemable) : 0;
-  const finalPayable = Math.max(1, subtotal - couponDiscount - coinsDiscount);
+  const finalPayable = Math.max(1, subtotal - couponDiscount);
 
-  const selectedBlockObj = CAMPUS_BLOCKS.find((b) => b.code === selectedBlock) || CAMPUS_BLOCKS[0];
+  // Single unified Razorpay Checkout launcher (Requirement #5)
+  const handleLaunchRazorpayCheckout = async () => {
+    setCheckoutError(null);
+    setIsLaunchingRazorpay(true);
+
+    try {
+      // 1. Create valid order on the backend using Razorpay server-side API
+      // Authoritative calculation from authoritative product prices in db
+      const res = await fetch('/api/payments/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: cartItems.map((x) => ({
+            id: x.item.id,
+            quantity: x.qty,
+          })),
+          couponCode: appliedCoupon?.code,
+          amount: finalPayable,
+        }),
+      });
+
+      const orderData = await res.json();
+      if (!res.ok || !orderData.success) {
+        const errorMsg =
+          orderData.message ||
+          'Razorpay order creation failed. Please check merchant gateway configuration or network connectivity.';
+        setCheckoutError(errorMsg);
+        onPayFailed('Razorpay Checkout', errorMsg);
+        setIsLaunchingRazorpay(false);
+        return;
+      }
+
+      // 2. Load Razorpay Checkout SDK
+      const scriptLoaded = await loadRazorpayScript();
+      if (!scriptLoaded) {
+        const errorMsg = 'Failed to load Razorpay Checkout SDK. Please check your internet connection.';
+        setCheckoutError(errorMsg);
+        onPayFailed('Razorpay Checkout', errorMsg);
+        setIsLaunchingRazorpay(false);
+        return;
+      }
+
+      const RazorpayConstructor = (
+        window as unknown as {
+          Razorpay: new (opts: Record<string, unknown>) => {
+            open: () => void;
+            on: (event: string, handler: (data: Record<string, unknown>) => void) => void;
+          };
+        }
+      ).Razorpay;
+
+      if (!RazorpayConstructor) {
+        const errorMsg = 'Razorpay checkout interface could not be initialized.';
+        setCheckoutError(errorMsg);
+        onPayFailed('Razorpay Checkout', errorMsg);
+        setIsLaunchingRazorpay(false);
+        return;
+      }
+
+      // 3. Configure and open actual Razorpay Checkout interface
+      // Enables all supported UPI payment methods (GPay, PhonePe, Paytm, etc.) and cards
+      const rzpOptions: Record<string, unknown> = {
+        key: orderData.keyId || orderData.key,
+        amount: orderData.amount,
+        currency: orderData.currency || 'INR',
+        name: 'NESTY',
+        description: 'Campus Canteen Food Order',
+        image: '/images/nesty-logo.jpg',
+        order_id: orderData.razorpayOrderId,
+        prefill: {
+          name: user.name,
+          email: user.email,
+          contact: user.phone || '9999999999',
+        },
+        notes: {
+          student_email: user.email,
+          student_name: user.name,
+        },
+        theme: {
+          color: '#701F2B',
+        },
+        modal: {
+          ondismiss: () => {
+            setIsLaunchingRazorpay(false);
+            onPayFailed('Razorpay Checkout', 'Payment was cancelled or closed before completion.');
+          },
+        },
+        handler: async (response: {
+          razorpay_payment_id?: string;
+          razorpay_order_id?: string;
+          razorpay_signature?: string;
+        }) => {
+          setIsLaunchingRazorpay(false);
+          const paymentId = response.razorpay_payment_id;
+          const orderId = response.razorpay_order_id || orderData.razorpayOrderId;
+          const signature = response.razorpay_signature;
+
+          if (!paymentId) {
+            onPayFailed('Razorpay Checkout', 'No payment reference received from gateway.');
+            return;
+          }
+
+          // 4. Verify payment signature securely on the backend
+          try {
+            const verifyRes = await fetch('/api/payments/verify', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${localStorage.getItem('nesty_web_auth_token') || ''}`,
+              },
+              body: JSON.stringify({
+                razorpay_order_id: orderId,
+                razorpay_payment_id: paymentId,
+                razorpay_signature: signature,
+                studentEmail: user.email,
+                studentName: user.name,
+                studentPhone: user.phone,
+                items: cartItems.map((x) => ({
+                  id: x.item.id,
+                  name: x.item.name,
+                  price: x.item.price,
+                  quantity: x.qty,
+                  isVeg: x.item.isVeg,
+                })),
+                totalAmount: subtotal,
+                discount: couponDiscount,
+                isTestPayment: orderData.isTestMode,
+              }),
+            });
+
+            const verifyData = await verifyRes.json();
+            if (verifyRes.ok && verifyData.success) {
+              onPaySuccess('Razorpay UPI / Online', paymentId, orderId);
+            } else {
+              const failReason = verifyData.message || 'Server-side payment signature verification failed.';
+              setCheckoutError(failReason);
+              onPayFailed('Razorpay Checkout', failReason);
+            }
+          } catch {
+            const failReason = 'Network error during server payment verification.';
+            setCheckoutError(failReason);
+            onPayFailed('Razorpay Checkout', failReason);
+          }
+        },
+      };
+
+      const rzpInstance = new RazorpayConstructor(rzpOptions);
+      rzpInstance.on('payment.failed', (failData: Record<string, unknown>) => {
+        setIsLaunchingRazorpay(false);
+        const errObj = failData.error as Record<string, unknown> | undefined;
+        const reason = (errObj?.description || 'Payment was declined by bank or UPI application.') as string;
+        setCheckoutError(reason);
+        onPayFailed('Razorpay Checkout', reason);
+      });
+
+      rzpInstance.open();
+    } catch (err: unknown) {
+      setIsLaunchingRazorpay(false);
+      const msg = err instanceof Error ? err.message : 'Unknown payment gateway error';
+      setCheckoutError(msg);
+      onPayFailed('Razorpay Checkout', msg);
+    }
+  };
+
+  const activeAlert = paymentErrorAlert || checkoutError;
 
   return (
     <div
@@ -111,25 +277,23 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
-          {paymentErrorAlert && (
+          {activeAlert && (
             <div
               data-testid="payment_error_alert_card"
               className="p-3.5 rounded-2xl bg-nesty-errorBg border border-nesty-error space-y-2"
             >
               <div className="flex items-center gap-1.5 text-nesty-error font-extrabold text-xs">
                 <AlertCircle className="w-4 h-4" />
-                <span>Payment Alert</span>
+                <span>Payment Notice</span>
               </div>
-              <p className="text-xs text-nesty-textPrimary">{paymentErrorAlert}</p>
+              <p className="text-xs text-nesty-textPrimary">{activeAlert}</p>
               <button
-                onClick={() => {
-                  setActiveGatewayType('Razorpay Online Gateway');
-                  setShowGatewaySheet(true);
-                }}
+                onClick={handleLaunchRazorpayCheckout}
+                disabled={isLaunchingRazorpay || isProcessingPayment}
                 data-testid="retry_payment_button"
                 className="w-full py-2 rounded-xl bg-nesty-burgundy text-nesty-cream font-bold text-xs flex items-center justify-center gap-1.5"
               >
-                <RefreshCw className="w-3.5 h-3.5" /> Retry Payment with Razorpay
+                <RefreshCw className="w-3.5 h-3.5" /> Retry Razorpay Checkout
               </button>
             </div>
           )}
@@ -139,7 +303,7 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
               <ShoppingCart className="w-14 h-14 text-nesty-goldDark mx-auto" />
               <h3 className="text-base font-extrabold text-nesty-burgundy">Your cart is empty</h3>
               <p className="text-xs text-nesty-textSecondary max-w-xs mx-auto">
-                Add freshly prepared snacks from the Nesty menu to get started!
+                Add freshly prepared items from the NESTY canteen menu to checkout.
               </p>
               <button
                 onClick={onClose}
@@ -205,39 +369,11 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                 </div>
               ))}
 
-              <div className="p-3.5 rounded-2xl bg-nesty-creamElevated border border-nesty-creamBorder space-y-2.5">
-                <div className="flex items-center gap-1.5 text-xs font-bold text-nesty-textPrimary">
-                  <MapPin className="w-4 h-4 text-nesty-burgundy" />
-                  <span>Select Campus Pickup Block</span>
-                </div>
-                <div className="grid grid-cols-4 gap-1.5">
-                  {CAMPUS_BLOCKS.map((b) => {
-                    const isSel = selectedBlock === b.code;
-                    return (
-                      <button
-                        key={b.code}
-                        onClick={() => onSelectBlock(b.code)}
-                        data-testid={`select_block_${b.code}`}
-                        className={`py-2 rounded-xl text-xs font-extrabold border transition ${
-                          isSel
-                            ? 'bg-nesty-burgundy text-nesty-cream border-nesty-gold'
-                            : 'bg-nesty-creamSurface text-nesty-textPrimary border-nesty-creamBorder'
-                        }`}
-                      >
-                        {b.code}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="text-[11px] font-semibold text-nesty-burgundy">
-                  Selected Counter: {selectedBlockObj.name}
-                </div>
-              </div>
-
+              {/* Promo Coupon Section (No coins) */}
               <div className="p-3.5 rounded-2xl bg-nesty-creamElevated border border-nesty-creamBorder space-y-2.5">
                 <div className="flex items-center gap-1.5 text-xs font-bold text-nesty-textPrimary">
                   <Tag className="w-4 h-4 text-nesty-goldDark" />
-                  <span>Coupons & Nesty Coins</span>
+                  <span>Promo Coupons</span>
                 </div>
 
                 {appliedCoupon ? (
@@ -269,23 +405,9 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                     </button>
                   </div>
                 )}
-
-                {user.coins > 0 && (
-                  <label className="flex items-center gap-2 pt-1 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={redeemCoins}
-                      onChange={(e) => onToggleRedeemCoins(e.target.checked)}
-                      className="w-4 h-4 accent-nesty-burgundy rounded"
-                    />
-                    <Coins className="w-4 h-4 text-nesty-goldDark" />
-                    <span className="text-xs font-semibold text-nesty-textPrimary">
-                      Redeem Nesty Coins (Balance: {user.coins})
-                    </span>
-                  </label>
-                )}
               </div>
 
+              {/* Price Breakdown */}
               <div className="p-3.5 rounded-2xl bg-nesty-creamElevated border border-nesty-gold space-y-1.5 text-xs">
                 <div className="flex justify-between">
                   <span className="text-nesty-textSecondary">Items Subtotal:</span>
@@ -295,12 +417,6 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                   <div className="flex justify-between text-nesty-success">
                     <span>Promo Discount:</span>
                     <span className="font-bold">-₹{couponDiscount}</span>
-                  </div>
-                )}
-                {coinsDiscount > 0 && (
-                  <div className="flex justify-between text-nesty-goldDark">
-                    <span>Coins Redeemed:</span>
-                    <span className="font-bold">-₹{coinsDiscount}</span>
                   </div>
                 )}
                 <div className="flex justify-between">
@@ -323,102 +439,28 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
 
         {cartItems.length > 0 && (
           <div className="p-4 bg-nesty-creamElevated border-t border-nesty-gold/50 space-y-2">
+            {/* One clear 'Pay Now' button launching Razorpay Checkout (Requirement #5) */}
             <button
-              onClick={() => {
-                setActiveGatewayType('Razorpay Online Gateway');
-                setShowGatewaySheet(true);
-              }}
-              disabled={isProcessingPayment}
-              data-testid="pay_razorpay_gateway_button"
-              className="w-full py-3 rounded-xl bg-nesty-burgundy text-nesty-cream font-extrabold text-sm flex items-center justify-center gap-2 hover:bg-nesty-burgundyDark transition disabled:opacity-60"
+              onClick={handleLaunchRazorpayCheckout}
+              disabled={isLaunchingRazorpay || isProcessingPayment}
+              data-testid="pay_now_razorpay_button"
+              className="w-full py-3.5 rounded-xl bg-nesty-burgundy text-nesty-cream font-extrabold text-sm flex items-center justify-center gap-2 hover:bg-nesty-burgundyDark transition disabled:opacity-60 shadow-lg"
             >
               <CreditCard className="w-4 h-4" />
               <span>
-                {isProcessingPayment
-                  ? 'Verifying Payment...'
-                  : `Pay ₹${finalPayable} (Online Gateway)`}
+                {isLaunchingRazorpay || isProcessingPayment
+                  ? 'Connecting to Razorpay...'
+                  : `Pay Now • ₹${finalPayable} (Razorpay Checkout)`}
               </span>
             </button>
 
-            <button
-              onClick={() => {
-                setActiveGatewayType('UPI App (GPay / PhonePe)');
-                setShowGatewaySheet(true);
-              }}
-              disabled={isProcessingPayment}
-              data-testid="pay_upi_app_button"
-              className="w-full py-2.5 rounded-xl border border-nesty-gold bg-nesty-creamSurface text-nesty-burgundy font-bold text-xs flex items-center justify-center gap-2 hover:bg-nesty-cream"
-            >
-              <Wallet className="w-4 h-4" />
-              <span>Pay via UPI App (PhonePe / GPay / Paytm)</span>
-            </button>
-
-            <div className="flex items-center justify-center gap-1 text-[10px] text-nesty-textSecondary pt-0.5">
+            <div className="flex items-center justify-center gap-1.5 text-[11px] text-nesty-textSecondary pt-0.5">
               <ShieldCheck className="w-3.5 h-3.5 text-nesty-success" />
-              <span>Instant Order & Transaction ID Receipt (No QR Required)</span>
+              <span>Supports UPI (Google Pay, PhonePe, Paytm), Cards & Netbanking</span>
             </div>
           </div>
         )}
       </div>
-
-      {showGatewaySheet && (
-        <div
-          onClick={() => setShowGatewaySheet(false)}
-          className="fixed inset-0 z-50 bg-black/65 flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            data-testid="gateway_verification_modal"
-            className="w-full max-w-sm bg-nesty-creamSurface border-2 border-nesty-gold rounded-3xl shadow-2xl p-6 text-center space-y-4"
-          >
-            <div>
-              <h3 className="text-lg font-extrabold text-nesty-burgundy">{activeGatewayType}</h3>
-              <p className="text-xs text-nesty-textSecondary">
-                Merchant: Nesty Campus Canteen • Block {selectedBlock}
-              </p>
-            </div>
-
-            <div className="inline-block px-5 py-2.5 rounded-2xl bg-nesty-goldLight border border-nesty-gold text-xl font-extrabold text-nesty-burgundyDark">
-              Payable: ₹{finalPayable}
-            </div>
-
-            <p className="text-xs text-nesty-textSecondary">
-              Complete payment to generate your verified Order ID & Transaction ID receipt.
-            </p>
-
-            <div className="space-y-2">
-              <button
-                onClick={() => {
-                  const txnId = `TXN-${activeGatewayType.startsWith('UPI') ? 'UPI' : 'RZP'}-${
-                    100000 + Math.floor(Math.random() * 900000)
-                  }`;
-                  const rzpOrder = `order_${Date.now() % 1000000}`;
-                  setShowGatewaySheet(false);
-                  onPaySuccess(activeGatewayType, txnId, rzpOrder);
-                }}
-                data-testid="confirm_verified_payment_button"
-                className="w-full py-3 rounded-xl bg-nesty-burgundy text-nesty-cream font-extrabold text-xs hover:bg-nesty-burgundyDark"
-              >
-                Complete Verified Payment (₹{finalPayable})
-              </button>
-
-              <button
-                onClick={() => {
-                  setShowGatewaySheet(false);
-                  onPayFailed(
-                    activeGatewayType,
-                    'Payment was cancelled or declined by user before completion.'
-                  );
-                }}
-                data-testid="simulate_failed_payment_button"
-                className="w-full py-2.5 rounded-xl border border-nesty-error/50 bg-nesty-errorBg text-nesty-error font-bold text-xs"
-              >
-                Cancel / Simulate Failed Payment
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

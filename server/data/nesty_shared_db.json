@@ -51,19 +51,6 @@
       "fallbackImage": "https://images.unsplash.com/photo-1628294895950-9805252327bc?w=600&auto=format&fit=crop&q=80",
       "isAvailable": true,
       "stockCount": 90
-    },
-    {
-      "id": "paneer_puff_test",
-      "name": "Paneer Tikka Puff",
-      "description": "Spiced paneer puff baked fresh in the Nesty oven.",
-      "price": 35,
-      "category": "Bakery",
-      "unit": "pcs",
-      "isVeg": true,
-      "image": "https://deliz-canteen.onrender.com/images/samosa.png",
-      "fallbackImage": "https://images.unsplash.com/photo-1601050690597-df0568f70950?w=600&auto=format&fit=crop&q=80",
-      "isAvailable": true,
-      "stockCount": 100
     }
   ],
   "users": [
@@ -75,6 +62,7 @@
       "rollNo": "ADMIN-01",
       "block": "CB",
       "role": "admin",
+      "emailVerified": true,
       "coins": 500,
       "passwordHash": "7900b5d3464325ab8bf75b51559cac280c5e2681bc6e7d24af7e2e21cd2f4cad",
       "createdAt": "2026-09-01T08:00:00Z"
@@ -87,7 +75,8 @@
       "rollNo": "22B81A0501",
       "block": "CB",
       "role": "student",
-      "coins": 87,
+      "emailVerified": true,
+      "coins": 89,
       "passwordHash": "d3e45388de1ef97d3e1c8b58b374ea03d1654c1a3d83e2da1fed4b2b5104f5d6",
       "createdAt": "2026-09-10T09:30:00Z"
     },
@@ -99,9 +88,43 @@
       "rollNo": "22B81A0501",
       "block": "CM",
       "role": "student",
+      "emailVerified": true,
       "coins": 120,
       "passwordHash": "d3e45388de1ef97d3e1c8b58b374ea03d1654c1a3d83e2da1fed4b2b5104f5d6",
       "createdAt": "2026-09-12T11:15:00Z"
+    },
+    {
+      "email": "test_student_1791714438197@cvr.ac.in",
+      "id": "usr_45dea75b",
+      "name": "Priya Sharma",
+      "phone": "9876501234",
+      "rollNo": "23B81A3913",
+      "role": "student",
+      "emailVerified": true,
+      "passwordHash": "bdc5fbf2ec071c638c21bbe78e8c067894072b8a6bc6a6751b08540476f0f780",
+      "createdAt": "2026-10-11T10:27:18.198Z"
+    },
+    {
+      "email": "fresh_student_1791725806679@cvr.ac.in",
+      "id": "usr_7ed9f61d",
+      "name": "Fresh Student",
+      "phone": "9848012345",
+      "rollNo": "24B81A4430",
+      "role": "student",
+      "emailVerified": true,
+      "passwordHash": "5b1a0bb5735c558becb2cf32633ae3682d7d0df97940a0980053401fb0094812",
+      "createdAt": "2026-10-11T13:36:46.682Z"
+    },
+    {
+      "email": "fresh_student_1791725853776@cvr.ac.in",
+      "id": "usr_6eecb226",
+      "name": "Fresh Student",
+      "phone": "9848012345",
+      "rollNo": "24B81A3091",
+      "role": "student",
+      "emailVerified": true,
+      "passwordHash": "5b1a0bb5735c558becb2cf32633ae3682d7d0df97940a0980053401fb0094812",
+      "createdAt": "2026-10-11T13:37:33.778Z"
     }
   ],
   "coupons": [
@@ -131,6 +154,143 @@
     }
   ],
   "orders": [
+    {
+      "id": "NST-9765",
+      "studentEmail": "student@cvr.ac.in",
+      "studentName": "Aarav Reddy",
+      "studentPhone": "9848012345",
+      "items": [
+        {
+          "id": "samosa",
+          "name": "Samosa",
+          "price": 12,
+          "quantity": 2,
+          "isVeg": true
+        }
+      ],
+      "totalAmount": 24,
+      "discount": 0,
+      "finalAmount": 24,
+      "paymentMethod": "Razorpay UPI / Online",
+      "transactionId": "pay_rzp_ver_1791725853829",
+      "razorpayOrderId": "order_test_554d509e2063",
+      "paymentStatus": "PAID",
+      "orderStatus": "PENDING_PICKUP",
+      "claimedBy": null,
+      "claimedAt": null,
+      "createdAt": "2026-10-11T13:37:33.833Z"
+    },
+    {
+      "id": "NST-5440",
+      "studentEmail": "student@cvr.ac.in",
+      "studentName": "Aarav Reddy",
+      "studentPhone": "9848012345",
+      "items": [
+        {
+          "id": "samosa",
+          "name": "Samosa",
+          "price": 12,
+          "quantity": 2,
+          "isVeg": true
+        }
+      ],
+      "totalAmount": 24,
+      "discount": 0,
+      "finalAmount": 24,
+      "paymentMethod": "Razorpay UPI / Online",
+      "transactionId": "pay_rzp_ver_1791725806731",
+      "razorpayOrderId": "order_test_ac1e162800c6",
+      "paymentStatus": "PAID",
+      "orderStatus": "PENDING_PICKUP",
+      "claimedBy": null,
+      "claimedAt": null,
+      "createdAt": "2026-10-11T13:36:46.734Z"
+    },
+    {
+      "id": "NST-9699",
+      "studentEmail": "student@cvr.ac.in",
+      "studentName": "Aarav Reddy",
+      "studentPhone": "9123456780",
+      "items": [
+        {
+          "id": "special_masala_dosa",
+          "name": "Special Masala Dosa",
+          "price": 45,
+          "quantity": 1,
+          "isVeg": true
+        }
+      ],
+      "totalAmount": 45,
+      "discount": 0,
+      "finalAmount": 45,
+      "paymentMethod": "Razorpay UPI / Online",
+      "transactionId": "pay_rzp_test_1791714438214",
+      "razorpayOrderId": "order_test_d6f842ecc88e",
+      "paymentStatus": "PAID",
+      "orderStatus": "READY",
+      "claimedBy": null,
+      "claimedAt": null,
+      "createdAt": "2026-10-11T10:27:18.217Z"
+    },
+    {
+      "id": "NST-1163",
+      "studentEmail": "student@cvr.ac.in",
+      "studentName": "Aarav Reddy",
+      "studentPhone": "",
+      "block": "CB",
+      "items": [
+        {
+          "id": "veg_puff",
+          "name": "Veg Puff",
+          "price": 25,
+          "quantity": 1,
+          "isVeg": true
+        }
+      ],
+      "totalAmount": 25,
+      "discount": 0,
+      "finalAmount": 25,
+      "coinsEarned": 0,
+      "coinsRedeemed": 0,
+      "paymentMethod": "Razorpay Online Gateway",
+      "transactionId": "FAIL-13382",
+      "razorpayOrderId": null,
+      "paymentStatus": "FAILED",
+      "orderStatus": "CANCELLED",
+      "failureReason": "Declined by bank",
+      "claimedBy": null,
+      "claimedAt": null,
+      "createdAt": "2026-10-11T10:03:33.382Z"
+    },
+    {
+      "id": "NST-9331",
+      "studentEmail": "student@cvr.ac.in",
+      "studentName": "Aarav Reddy",
+      "studentPhone": "9123456780",
+      "block": "CB",
+      "items": [
+        {
+          "id": "samosa",
+          "name": "Samosa",
+          "price": 12,
+          "quantity": 2,
+          "isVeg": true
+        }
+      ],
+      "totalAmount": 24,
+      "discount": 0,
+      "finalAmount": 24,
+      "coinsEarned": 2,
+      "coinsRedeemed": 0,
+      "paymentMethod": "Razorpay UPI",
+      "transactionId": "TXN-WEB-TEST-901",
+      "razorpayOrderId": null,
+      "paymentStatus": "PAID",
+      "orderStatus": "PENDING_PICKUP",
+      "claimedBy": null,
+      "claimedAt": null,
+      "createdAt": "2026-10-11T10:03:33.380Z"
+    },
     {
       "id": "NST-2320",
       "studentEmail": "student@cvr.ac.in",
@@ -260,6 +420,73 @@
       "orderStatus": "CLAIMED",
       "claimedBy": "Counter-CB",
       "claimedAt": "2026-10-08T13:20:00Z",
+      "createdAt": "2026-10-08T13:05:00Z"
+    }
+  ],
+  "payments": [
+    {
+      "id": "pmt_pay_rzp_ver_1791725853829",
+      "orderId": "NST-9765",
+      "studentEmail": "student@cvr.ac.in",
+      "studentName": "Aarav Reddy",
+      "amount": 24,
+      "currency": "INR",
+      "paymentMethod": "Razorpay UPI / Online",
+      "transactionId": "pay_rzp_ver_1791725853829",
+      "razorpayOrderId": "order_test_554d509e2063",
+      "status": "PAID",
+      "createdAt": "2026-10-11T13:37:33.833Z"
+    },
+    {
+      "id": "pmt_pay_rzp_ver_1791725806731",
+      "orderId": "NST-5440",
+      "studentEmail": "student@cvr.ac.in",
+      "studentName": "Aarav Reddy",
+      "amount": 24,
+      "currency": "INR",
+      "paymentMethod": "Razorpay UPI / Online",
+      "transactionId": "pay_rzp_ver_1791725806731",
+      "razorpayOrderId": "order_test_ac1e162800c6",
+      "status": "PAID",
+      "createdAt": "2026-10-11T13:36:46.734Z"
+    },
+    {
+      "id": "pmt_pay_rzp_test_1791714438214",
+      "orderId": "NST-9699",
+      "studentEmail": "student@cvr.ac.in",
+      "studentName": "Aarav Reddy",
+      "amount": 45,
+      "currency": "INR",
+      "paymentMethod": "Razorpay UPI / Online",
+      "transactionId": "pay_rzp_test_1791714438214",
+      "razorpayOrderId": "order_test_d6f842ecc88e",
+      "status": "PAID",
+      "createdAt": "2026-10-11T10:27:18.217Z"
+    },
+    {
+      "id": "pmt_RZP_982341",
+      "orderId": "NST-8492",
+      "studentEmail": "student@cvr.ac.in",
+      "studentName": "Aarav Reddy",
+      "amount": 74,
+      "currency": "INR",
+      "paymentMethod": "Razorpay UPI",
+      "transactionId": "TXN-RZP-982341",
+      "razorpayOrderId": "order_P9xK2m81L",
+      "status": "PAID",
+      "createdAt": "2026-10-09T10:30:00Z"
+    },
+    {
+      "id": "pmt_RZP_774120",
+      "orderId": "NST-7910",
+      "studentEmail": "student@cvr.ac.in",
+      "studentName": "Aarav Reddy",
+      "amount": 50,
+      "currency": "INR",
+      "paymentMethod": "Razorpay UPI",
+      "transactionId": "TXN-RZP-774120",
+      "razorpayOrderId": "order_P8mN1k72J",
+      "status": "PAID",
       "createdAt": "2026-10-08T13:05:00Z"
     }
   ]

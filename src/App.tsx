@@ -5,6 +5,7 @@ import {
   MenuItem,
   OrderItem,
   OrderRecord,
+  PaymentRecord,
   QrValidationResult,
   UserAccount,
 } from './types';
@@ -64,15 +65,14 @@ export const App: React.FC = () => {
 
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [orders, setOrders] = useState<OrderRecord[]>([]);
+  const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [students, setStudents] = useState<UserAccount[]>([]);
   const [coupons, setCoupons] = useState<CouponRecord[]>([]);
   const [announcements, setAnnouncements] = useState<AnnouncementRecord[]>([]);
 
   const [studentDestination, setStudentDestination] = useState<StudentDestination>('MENU');
-  const [selectedBlock, setSelectedBlock] = useState<string>(currentUser?.block || 'CB');
   const [cartQuantities, setCartQuantities] = useState<Record<string, number>>({});
   const [appliedCoupon, setAppliedCoupon] = useState<CouponRecord | null>(null);
-  const [redeemCoins, setRedeemCoins] = useState<boolean>(false);
   const [isCartOpen, setIsCartOpen] = useState<boolean>(false);
   const [isProcessingPayment, setIsProcessingPayment] = useState<boolean>(false);
   const [paymentErrorAlert, setPaymentErrorAlert] = useState<string | null>(null);
@@ -150,12 +150,22 @@ export const App: React.FC = () => {
       if (currentUser) {
         const ordUrl =
           currentUser.role === 'admin'
-            ? '/api/orders'
+            ? '/api/admin/orders'
             : `/api/orders?email=${encodeURIComponent(currentUser.email)}`;
         const ordRes = await fetch(ordUrl, { headers: authHeaders() });
         if (ordRes.ok) {
           const data = await ordRes.json();
           if (Array.isArray(data.orders)) setOrders(data.orders);
+        }
+
+        const pmtUrl =
+          currentUser.role === 'admin'
+            ? '/api/payments'
+            : `/api/payments?email=${encodeURIComponent(currentUser.email)}`;
+        const pmtRes = await fetch(pmtUrl, { headers: authHeaders() });
+        if (pmtRes.ok) {
+          const data = await pmtRes.json();
+          if (Array.isArray(data.payments)) setPayments(data.payments);
         }
 
         if (currentUser.role === 'admin') {
@@ -175,6 +185,7 @@ export const App: React.FC = () => {
     syncAllFromBackend();
   }, [syncAllFromBackend]);
 
+  // Unified Login Handler (Requirement #1 & #4)
   const handleLogin = async (identifier: string, password: string) => {
     setIsAuthLoading(true);
     try {
@@ -185,62 +196,46 @@ export const App: React.FC = () => {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        showToast(data.message || 'Sign in failed.', true);
+        showToast(data.message || 'Invalid email or password.', true);
       } else {
         saveSession(data.token, data.user);
-        setSelectedBlock(data.user.block || 'CB');
         setStudentDestination('MENU');
-        showToast(`Welcome to Nesty, ${data.user.name}!`);
+        showToast(`Welcome back, ${data.user.name}!`);
       }
     } catch {
-      showToast('Unable to reach Nesty server. Please try again.', true);
+      showToast('Unable to reach NESTY server. Please check connection.', true);
     } finally {
       setIsAuthLoading(false);
     }
   };
 
+  // Student Registration without pickup block (Requirement #3)
   const handleRegisterStudent = async (
     email: string,
     password: string,
     name: string,
     phone: string,
-    rollNo: string,
-    block: string
+    rollNo: string
   ) => {
     setIsAuthLoading(true);
     try {
       const res = await fetch('/api/auth/register-student', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, name, phone, rollNo, block }),
+        body: JSON.stringify({ email, password, name, phone, rollNo }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
         showToast(data.message || 'Registration failed.', true);
       } else {
         saveSession(data.token, data.user);
-        setSelectedBlock(data.user.block || 'CB');
         setStudentDestination('MENU');
         showToast(data.message || 'Student account created!');
       }
     } catch {
-      showToast('Unable to register right now.', true);
+      showToast('Unable to complete registration right now.', true);
     } finally {
       setIsAuthLoading(false);
-    }
-  };
-
-  const handleResetPassword = async (email: string, newPassword: string) => {
-    try {
-      const res = await fetch('/api/auth/reset-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, newPassword }),
-      });
-      const data = await res.json();
-      showToast(data.message || 'Password reset completed.', !data.success);
-    } catch {
-      showToast('Failed to reset password.', true);
     }
   };
 
@@ -248,19 +243,17 @@ export const App: React.FC = () => {
     name: string,
     phone: string,
     rollNo: string,
-    block: string,
     newPassword?: string
   ) => {
     try {
       const res = await fetch('/api/auth/profile', {
         method: 'PUT',
         headers: authHeaders(),
-        body: JSON.stringify({ name, phone, rollNo, block, newPassword }),
+        body: JSON.stringify({ name, phone, rollNo, newPassword }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
         saveSession(authToken, data.user);
-        setSelectedBlock(data.user.block || 'CB');
         showToast('Profile updated!');
       } else {
         showToast(data.message || 'Could not update profile.', true);
@@ -274,9 +267,8 @@ export const App: React.FC = () => {
     saveSession(null, null);
     setCartQuantities({});
     setAppliedCoupon(null);
-    setRedeemCoins(false);
     setIsCartOpen(false);
-    showToast('Signed out of Nesty.');
+    showToast('Signed out of NESTY.');
   };
 
   const handleAddToCart = (item: MenuItem) => {
@@ -315,13 +307,14 @@ export const App: React.FC = () => {
       return sum + (it ? it.price * qty : 0);
     }, 0);
     if (subtotal < match.minOrderAmount) {
-      showToast(`Minimum cart value of ₹${match.minOrderAmount} required for ${match.code}`, true);
+      showToast(`Minimum order of ₹${match.minOrderAmount} required for coupon ${match.code}`, true);
       return;
     }
     setAppliedCoupon(match);
     showToast(`Coupon ${match.code} applied!`);
   };
 
+  // Verified Payment Success Callback (Requirement #5)
   const handleVerifiedPaymentSuccess = async (
     paymentMethod: string,
     transactionId: string,
@@ -329,86 +322,44 @@ export const App: React.FC = () => {
   ) => {
     if (!currentUser) return;
 
-    const orderItems: OrderItem[] = Object.entries(cartQuantities)
-      .map(([id, quantity]) => {
-        const m = menuItems.find((it) => it.id === id);
-        return m && quantity > 0
-          ? { id: m.id, name: m.name, price: m.price, quantity, isVeg: m.isVeg }
-          : null;
-      })
-      .filter((x): x is OrderItem => x !== null);
-
-    if (orderItems.length === 0) return;
-
-    const subtotal = orderItems.reduce((sum, it) => sum + it.price * it.quantity, 0);
-    const couponDiscount =
-      appliedCoupon && subtotal >= appliedCoupon.minOrderAmount
-        ? Math.min(
-            Math.floor((subtotal * appliedCoupon.discountPercent) / 100),
-            appliedCoupon.maxDiscount
-          )
-        : 0;
-    const maxCoins = Math.min(20, Math.max(0, subtotal - couponDiscount - 1));
-    const coinsRedeemed = redeemCoins ? Math.min(currentUser.coins, maxCoins) : 0;
-
-    setIsProcessingPayment(true);
+    setCartQuantities({});
+    setAppliedCoupon(null);
+    setIsCartOpen(false);
     setPaymentErrorAlert(null);
 
-    try {
-      const res = await fetch('/api/orders', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({
-          studentEmail: currentUser.email,
-          studentName: currentUser.name,
-          studentPhone: currentUser.phone,
-          block: selectedBlock,
-          items: orderItems,
-          totalAmount: subtotal,
-          discount: couponDiscount,
-          coinsRedeemed,
-          paymentMethod,
-          transactionId,
-          razorpayOrderId,
-        }),
-      });
+    await syncAllFromBackend();
+
+    // Look for confirmed order
+    const ordUrl = `/api/orders?email=${encodeURIComponent(currentUser.email)}`;
+    const res = await fetch(ordUrl, { headers: authHeaders() });
+    if (res.ok) {
       const data = await res.json();
-      if (res.ok && data.success) {
-        if (data.user) {
-          saveSession(authToken, data.user);
-        }
-        setCartQuantities({});
-        setAppliedCoupon(null);
-        setRedeemCoins(false);
-        setIsCartOpen(false);
-        setSelectedReceiptOrder(data.order);
-        await syncAllFromBackend();
-        showToast(data.message || `Order #${data.order.id} confirmed!`);
-      } else {
-        setPaymentErrorAlert(data.message || 'Payment verification failed.');
+      if (Array.isArray(data.orders)) {
+        setOrders(data.orders);
+        const match = data.orders.find((o: OrderRecord) => o.transactionId === transactionId) || data.orders[0];
+        if (match) setSelectedReceiptOrder(match);
       }
-    } catch {
-      setPaymentErrorAlert('Network error while verifying payment.');
-    } finally {
-      setIsProcessingPayment(false);
     }
+
+    showToast(`Payment confirmed! Transaction ID: ${transactionId}`);
   };
 
   const handlePaymentFailed = async (paymentMethod: string, reason: string) => {
     if (!currentUser) return;
-    const orderItems: OrderItem[] = Object.entries(cartQuantities)
-      .map(([id, quantity]) => {
-        const m = menuItems.find((it) => it.id === id);
-        return m && quantity > 0
-          ? { id: m.id, name: m.name, price: m.price, quantity, isVeg: m.isVeg }
-          : null;
-      })
-      .filter((x): x is OrderItem => x !== null);
-
-    const subtotal = orderItems.reduce((sum, it) => sum + it.price * it.quantity, 0);
-    setPaymentErrorAlert(`Payment Failed (${paymentMethod}): ${reason}`);
+    setPaymentErrorAlert(`Payment failed or cancelled (${paymentMethod}): ${reason}`);
 
     try {
+      const orderItems: OrderItem[] = Object.entries(cartQuantities)
+        .map(([id, quantity]) => {
+          const m = menuItems.find((it) => it.id === id);
+          return m && quantity > 0
+            ? { id: m.id, name: m.name, price: m.price, quantity, isVeg: m.isVeg }
+            : null;
+        })
+        .filter((x): x is OrderItem => x !== null);
+
+      const subtotal = orderItems.reduce((sum, it) => sum + it.price * it.quantity, 0);
+
       await fetch('/api/payment-failed', {
         method: 'POST',
         headers: authHeaders(),
@@ -416,7 +367,6 @@ export const App: React.FC = () => {
           studentEmail: currentUser.email,
           studentName: currentUser.name,
           studentPhone: currentUser.phone,
-          block: selectedBlock,
           items: orderItems,
           amount: subtotal,
           paymentMethod,
@@ -440,9 +390,6 @@ export const App: React.FC = () => {
       const result = (await res.json()) as QrValidationResult;
       setQrScanResult(result);
 
-      if (result.valid && result.type === 'CAMPUS_COUNTER' && result.block) {
-        setSelectedBlock(result.block);
-      }
       if (result.valid && result.type === 'PROMO_COUPON' && result.couponCode) {
         const cpn = coupons.find((c) => c.code.toUpperCase() === result.couponCode?.toUpperCase());
         if (cpn) setAppliedCoupon(cpn);
@@ -452,7 +399,7 @@ export const App: React.FC = () => {
         valid: false,
         type: 'INVALID',
         title: 'Validation Error',
-        subtitle: 'Could not reach the backend QR validator.',
+        subtitle: 'Could not connect to QR validation service.',
       });
     } finally {
       setIsValidatingQr(false);
@@ -489,7 +436,7 @@ export const App: React.FC = () => {
         } else {
           await syncAllFromBackend();
         }
-        showToast(data.message || 'Product saved to Nesty database!');
+        showToast(data.message || 'Product saved to NESTY catalog!');
         return true;
       } else {
         showToast(data.message || 'Failed to save product.', true);
@@ -511,7 +458,7 @@ export const App: React.FC = () => {
       const data = await res.json();
       if (res.ok && data.success) {
         await syncAllFromBackend();
-        showToast(data.message || 'Updated availability');
+        showToast(data.message || 'Updated stock availability');
       } else {
         showToast(data.message || 'Unauthorized', true);
       }
@@ -551,9 +498,9 @@ export const App: React.FC = () => {
           setSelectedReceiptOrder(data.order);
         }
         await syncAllFromBackend();
-        showToast(data.message || `Order #${orderId} updated to ${newStatus}`);
+        showToast(data.message || `Order #${orderId} marked as ${newStatus}`);
       } else {
-        showToast(data.message || 'Failed to update status', true);
+        showToast(data.message || 'Failed to update order status', true);
       }
     } catch {
       showToast('Error updating order status', true);
@@ -602,6 +549,8 @@ export const App: React.FC = () => {
     if (res.ok && data.success) {
       setAnnouncements(data.announcements);
       showToast('Announcement published!');
+    } else {
+      showToast(data.message || 'Failed to publish announcement', true);
     }
   };
 
@@ -626,7 +575,7 @@ export const App: React.FC = () => {
   );
 
   return (
-    <div className="min-h-screen bg-nesty-cream text-nesty-textPrimary flex flex-col">
+    <div className="min-h-screen bg-nesty-cream text-nesty-textPrimary flex flex-col font-sans">
       {showSplash && (
         <NestySplashOverlay
           onFinished={() => {
@@ -640,12 +589,17 @@ export const App: React.FC = () => {
         />
       )}
 
+      {/* UNIFIED AUTHENTICATION (Requirement #4) */}
       {!currentUser ? (
         <AuthScreen
           isLoading={isAuthLoading}
           onLogin={handleLogin}
           onRegisterStudent={handleRegisterStudent}
-          onResetPassword={handleResetPassword}
+          onSessionEstablished={(token, user) => {
+            saveSession(token, user);
+            setStudentDestination('MENU');
+            showToast(`Welcome to NESTY, ${user.name}!`);
+          }}
         />
       ) : (
         <>
@@ -660,6 +614,7 @@ export const App: React.FC = () => {
             onSignOut={handleSignOut}
           />
 
+          {/* AUTOMATIC ROLE-BASED ROUTING: Admin Dashboard vs Student Interface (Requirement #4) */}
           {currentUser.role === 'admin' ? (
             <main className="flex-1">
               <AdminDashboardView
@@ -692,13 +647,10 @@ export const App: React.FC = () => {
               <main className="flex-1 p-4 sm:p-6 min-w-0">
                 {studentDestination === 'MENU' && (
                   <StudentMenuView
-                    user={currentUser}
                     menuItems={menuItems}
                     announcements={announcements}
                     activeOrders={activeOrders}
                     cartQuantities={cartQuantities}
-                    selectedBlock={selectedBlock}
-                    onSelectBlock={setSelectedBlock}
                     onAddToCart={handleAddToCart}
                     onUpdateCartQuantity={handleUpdateCartQty}
                     onOpenCart={() => setIsCartOpen(true)}
@@ -716,6 +668,7 @@ export const App: React.FC = () => {
 
                 {studentDestination === 'PAYMENT_HISTORY' && (
                   <StudentPaymentHistoryView
+                    payments={payments}
                     orders={orders}
                     onOpenOrderDetails={(ord) => setSelectedReceiptOrder(ord)}
                   />
@@ -737,17 +690,13 @@ export const App: React.FC = () => {
             user={currentUser}
             menuItems={menuItems}
             cartQuantities={cartQuantities}
-            selectedBlock={selectedBlock}
             appliedCoupon={appliedCoupon}
-            redeemCoins={redeemCoins}
             paymentErrorAlert={paymentErrorAlert}
             isProcessingPayment={isProcessingPayment}
             onUpdateQuantity={handleUpdateCartQty}
             onClearCart={() => setCartQuantities({})}
-            onSelectBlock={setSelectedBlock}
             onApplyCoupon={handleApplyCoupon}
             onClearCoupon={() => setAppliedCoupon(null)}
-            onToggleRedeemCoins={setRedeemCoins}
             onPaySuccess={handleVerifiedPaymentSuccess}
             onPayFailed={handlePaymentFailed}
             onClose={() => setIsCartOpen(false)}

@@ -1,19 +1,20 @@
 import React, { useState } from 'react';
 import {
   AnnouncementRecord,
-  CAMPUS_BLOCKS,
   MenuItem,
   OrderRecord,
+  PaymentRecord,
   UserAccount,
 } from '../types';
 import {
+  AlertCircle,
   Bell,
   CheckCircle2,
   Clock,
-  Coins,
   CreditCard,
+  KeyRound,
+  Lock,
   LogOut,
-  MapPin,
   Minus,
   Plus,
   Receipt,
@@ -21,17 +22,15 @@ import {
   Search,
   ShoppingCart,
   User,
+  X,
   XCircle,
 } from 'lucide-react';
 
 interface StudentMenuViewProps {
-  user: UserAccount;
   menuItems: MenuItem[];
   announcements: AnnouncementRecord[];
   activeOrders: OrderRecord[];
   cartQuantities: Record<string, number>;
-  selectedBlock: string;
-  onSelectBlock: (blockCode: string) => void;
   onAddToCart: (item: MenuItem) => void;
   onUpdateCartQuantity: (itemId: string, delta: number) => void;
   onOpenCart: () => void;
@@ -40,13 +39,10 @@ interface StudentMenuViewProps {
 }
 
 export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
-  user,
   menuItems,
   announcements,
   activeOrders,
   cartQuantities,
-  selectedBlock,
-  onSelectBlock,
   onAddToCart,
   onUpdateCartQuantity,
   onOpenCart,
@@ -78,17 +74,18 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
 
   return (
     <div data-testid="student_menu_screen" className="space-y-5 pb-24 md:pb-8">
-      <div className="rounded-3xl bg-gradient-to-r from-nesty-burgundyDark via-nesty-burgundy to-nesty-burgundyLight border-[1.5px] border-nesty-gold p-5 sm:p-6 text-nesty-cream shadow-lg">
+      {/* Clean Food Ordering Header (No personalized greeting, No block names) */}
+      <div className="rounded-3xl bg-gradient-to-r from-nesty-burgundyDark via-nesty-burgundy to-nesty-burgundyLight border-[1.5px] border-nesty-gold p-6 text-nesty-cream shadow-lg">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-xs font-extrabold tracking-widest uppercase text-nesty-gold">
-              <span>FRESH CAMPUS CANTEEN</span>
+              <span>CAMPUS CANTEEN DINING</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-extrabold mt-1">
-              Hello, {user.name.split(' ')[0]}!
+              Fresh Food & Beverages
             </h1>
             <p className="text-xs sm:text-sm text-nesty-cream/85 mt-0.5">
-              Order ahead and pick up at your block counter using your Order ID or Transaction ID.
+              Order fresh food online and collect directly at the canteen counter using your Order ID or Transaction ID.
             </p>
           </div>
 
@@ -96,39 +93,11 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
             type="button"
             onClick={onRefreshMenu}
             data-testid="refresh_menu_button"
-            className="self-start sm:self-auto px-3.5 py-2 rounded-xl bg-nesty-cream/15 hover:bg-nesty-cream/25 border border-nesty-gold text-xs font-bold flex items-center gap-1.5 transition"
+            className="self-start sm:self-auto px-4 py-2.5 rounded-xl bg-nesty-cream/15 hover:bg-nesty-cream/25 border border-nesty-gold text-xs font-bold flex items-center gap-1.5 transition"
           >
             <RefreshCw className="w-3.5 h-3.5 text-nesty-gold" />
             <span>Sync Menu</span>
           </button>
-        </div>
-
-        <div className="mt-4 pt-3.5 border-t border-nesty-gold/30">
-          <div className="flex items-center gap-1.5 text-xs font-bold text-nesty-gold mb-2">
-            <MapPin className="w-3.5 h-3.5" />
-            <span>Select Campus Pickup Counter:</span>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {CAMPUS_BLOCKS.map((b) => {
-              const active = selectedBlock === b.code;
-              return (
-                <button
-                  key={b.code}
-                  type="button"
-                  onClick={() => onSelectBlock(b.code)}
-                  data-testid={`menu_block_${b.code}`}
-                  className={`px-3 py-2 rounded-xl text-left border transition ${
-                    active
-                      ? 'bg-nesty-gold text-nesty-textPrimary border-nesty-cream font-extrabold shadow-sm'
-                      : 'bg-nesty-burgundyDark/60 text-nesty-cream border-nesty-gold/40 hover:border-nesty-gold'
-                  }`}
-                >
-                  <div className="text-xs font-extrabold">{b.code} Block</div>
-                  <div className="text-[10px] opacity-85 truncate">{b.name}</div>
-                </button>
-              );
-            })}
-          </div>
         </div>
       </div>
 
@@ -142,6 +111,7 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
         </div>
       )}
 
+      {/* Active Orders Quick Access (No block names) */}
       {activeOrders.length > 0 && (
         <div className="space-y-2">
           <div className="text-xs font-extrabold uppercase tracking-wider text-nesty-burgundy">
@@ -161,7 +131,7 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
                       #{ord.id}
                     </span>
                     <span className="px-2 py-0.5 rounded-lg bg-nesty-goldLight border border-nesty-gold text-[11px] font-extrabold text-nesty-burgundyDark">
-                      {ord.block} Counter • {ord.orderStatus}
+                      Status: {ord.orderStatus}
                     </span>
                   </div>
                   <div className="text-xs font-mono font-bold text-nesty-textSecondary">
@@ -169,7 +139,7 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
                   </div>
                 </div>
                 <span className="px-3 py-1.5 rounded-xl bg-nesty-creamElevated border border-nesty-gold text-xs font-extrabold text-nesty-burgundy shrink-0">
-                  Receipt →
+                  View Receipt →
                 </span>
               </div>
             ))}
@@ -177,6 +147,7 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
         </div>
       )}
 
+      {/* Search & Category Filter Bar */}
       <div className="bg-nesty-creamSurface border border-nesty-creamBorder rounded-2xl p-3.5 space-y-3 shadow-sm">
         <div className="flex flex-col sm:flex-row gap-2.5">
           <div className="relative flex-1">
@@ -227,6 +198,7 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
         </div>
       </div>
 
+      {/* Product Cards Grid */}
       {filteredItems.length === 0 ? (
         <div className="rounded-3xl bg-nesty-creamSurface border border-nesty-creamBorder p-12 text-center">
           <p className="text-base font-extrabold text-nesty-burgundy">
@@ -294,7 +266,7 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
                       </span>
                     </div>
                     <p className="text-xs text-nesty-textSecondary mt-1 line-clamp-2">
-                      {item.description || 'Freshly prepared campus favorite snack.'}
+                      {item.description || 'Fresh campus favorite snack.'}
                     </p>
                   </div>
                 </div>
@@ -350,6 +322,7 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
         </div>
       )}
 
+      {/* Floating Checkout Bar */}
       {cartCount > 0 && (
         <div className="fixed bottom-16 md:bottom-6 left-4 right-4 md:left-auto md:right-8 md:w-96 z-20">
           <button
@@ -364,7 +337,7 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
               </div>
               <div className="text-left">
                 <div className="text-xs font-bold text-nesty-gold">View Cart & Checkout</div>
-                <div className="text-sm font-extrabold">Subtotal: ₹{cartSubtotal}</div>
+                <div className="text-sm font-extrabold">Total: ₹{cartSubtotal}</div>
               </div>
             </div>
             <div className="flex items-center gap-1.5 text-xs font-extrabold bg-nesty-cream text-nesty-burgundy px-3.5 py-2 rounded-xl">
@@ -393,8 +366,7 @@ export const StudentOrderHistoryView: React.FC<OrderHistoryViewProps> = ({
         <div>
           <h2 className="text-xl font-extrabold text-nesty-burgundy">Order History</h2>
           <p className="text-xs text-nesty-textSecondary mt-0.5">
-            Track your active and fulfilled campus orders. Click any order for its full digital
-            receipt and Transaction ID.
+            Track your canteen orders. Click any order to open and print your official bill/receipt.
           </p>
         </div>
         <Receipt className="w-8 h-8 text-nesty-goldDark shrink-0" />
@@ -426,7 +398,7 @@ export const StudentOrderHistoryView: React.FC<OrderHistoryViewProps> = ({
                       Order #{order.id}
                     </span>
                     <span className="px-2.5 py-1 rounded-xl bg-nesty-creamElevated border border-nesty-gold text-xs font-bold text-nesty-burgundy">
-                      {order.block} Block Counter
+                      Canteen Counter Pickup
                     </span>
                   </div>
 
@@ -479,7 +451,14 @@ export const StudentOrderHistoryView: React.FC<OrderHistoryViewProps> = ({
   );
 };
 
-export const StudentPaymentHistoryView: React.FC<OrderHistoryViewProps> = ({
+interface PaymentHistoryViewProps {
+  payments: PaymentRecord[];
+  orders: OrderRecord[];
+  onOpenOrderDetails: (order: OrderRecord) => void;
+}
+
+export const StudentPaymentHistoryView: React.FC<PaymentHistoryViewProps> = ({
+  payments,
   orders,
   onOpenOrderDetails,
 }) => {
@@ -489,69 +468,84 @@ export const StudentPaymentHistoryView: React.FC<OrderHistoryViewProps> = ({
         <div>
           <h2 className="text-xl font-extrabold text-nesty-burgundy">Payment History</h2>
           <p className="text-xs text-nesty-textSecondary mt-0.5">
-            Complete ledger of your verified UPI / Razorpay payments and Transaction IDs.
+            Verified ledger of your Razorpay transactions. Click any payment to view and download your receipt.
           </p>
         </div>
         <CreditCard className="w-8 h-8 text-nesty-goldDark shrink-0" />
       </div>
 
-      {orders.length === 0 ? (
+      {payments.length === 0 ? (
         <div className="bg-nesty-creamSurface border border-nesty-creamBorder rounded-3xl p-12 text-center">
           <CreditCard className="w-12 h-12 text-nesty-goldDark mx-auto mb-2" />
           <h3 className="text-base font-extrabold text-nesty-burgundy">No payment records yet</h3>
           <p className="text-xs text-nesty-textSecondary mt-1">
-            All payment transactions and Transaction IDs will be listed here.
+            Completed online and UPI transactions will be archived here.
           </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {orders.map((order) => {
-            const isPaid = order.paymentStatus === 'PAID' || order.paymentStatus === 'SUCCESS';
+          {payments.map((pmt) => {
+            const isPaid = pmt.status === 'PAID' || pmt.status === 'SUCCESS';
+            const matchedOrder = orders.find(
+              (o) => o.id === pmt.orderId || o.transactionId === pmt.transactionId
+            );
+
             return (
               <div
-                key={order.id}
-                onClick={() => onOpenOrderDetails(order)}
-                data-testid={`payment_history_card_${order.id}`}
+                key={pmt.id}
+                onClick={() => {
+                  if (matchedOrder) {
+                    onOpenOrderDetails(matchedOrder);
+                  }
+                }}
+                data-testid={`payment_history_card_${pmt.id}`}
                 className="cursor-pointer bg-nesty-creamSurface border-[1.5px] border-nesty-gold/80 rounded-3xl p-5 hover:shadow-md transition space-y-2.5"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="text-xs font-bold uppercase text-nesty-textSecondary">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-nesty-textSecondary">
                       TRANSACTION ID
                     </div>
                     <div className="text-sm font-mono font-extrabold text-nesty-burgundy">
-                      {order.transactionId}
+                      {pmt.transactionId}
                     </div>
                   </div>
 
-                  <span
-                    className={`px-3 py-1 rounded-xl text-xs font-extrabold ${
-                      isPaid
-                        ? 'bg-nesty-successBg text-nesty-success border border-nesty-success'
-                        : 'bg-nesty-errorBg text-nesty-error border border-nesty-error'
-                    }`}
-                  >
-                    {order.paymentStatus}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`px-3 py-1 rounded-xl text-xs font-extrabold ${
+                        isPaid
+                          ? 'bg-nesty-successBg text-nesty-success border border-nesty-success'
+                          : 'bg-nesty-errorBg text-nesty-error border border-nesty-error'
+                      }`}
+                    >
+                      {pmt.status}
+                    </span>
+                    <span className="px-2.5 py-1 rounded-xl bg-nesty-creamElevated border border-nesty-gold text-xs font-bold text-nesty-burgundy">
+                      Receipt →
+                    </span>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-nesty-creamBorder text-xs">
                   <div>
-                    <span className="text-nesty-textSecondary block">Order Ref</span>
-                    <span className="font-bold text-nesty-textPrimary">#{order.id}</span>
+                    <span className="text-nesty-textSecondary block">Order Reference</span>
+                    <span className="font-bold text-nesty-textPrimary">#{pmt.orderId}</span>
                   </div>
                   <div>
-                    <span className="text-nesty-textSecondary block">Method</span>
-                    <span className="font-bold text-nesty-textPrimary">{order.paymentMethod}</span>
+                    <span className="text-nesty-textSecondary block">Payment Method</span>
+                    <span className="font-bold text-nesty-textPrimary">{pmt.paymentMethod}</span>
                   </div>
                   <div>
-                    <span className="text-nesty-textSecondary block">Coins Earned</span>
-                    <span className="font-bold text-nesty-goldDark">+{order.coinsEarned}</span>
+                    <span className="text-nesty-textSecondary block">Date & Time</span>
+                    <span className="text-nesty-textPrimary font-medium">
+                      {pmt.createdAt.replace('T', ' ').slice(0, 16)}
+                    </span>
                   </div>
                   <div>
-                    <span className="text-nesty-textSecondary block">Amount</span>
+                    <span className="text-nesty-textSecondary block">Amount Paid</span>
                     <span className="text-sm font-extrabold text-nesty-burgundy">
-                      ₹{order.finalAmount}
+                      ₹{pmt.amount}
                     </span>
                   </div>
                 </div>
@@ -570,7 +564,6 @@ interface StudentProfileViewProps {
     name: string,
     phone: string,
     rollNo: string,
-    block: string,
     newPassword?: string
   ) => void;
   onSignOut: () => void;
@@ -584,41 +577,138 @@ export const StudentProfileView: React.FC<StudentProfileViewProps> = ({
   const [name, setName] = useState(user.name);
   const [phone, setPhone] = useState(user.phone);
   const [rollNo, setRollNo] = useState(user.rollNo);
-  const [block, setBlock] = useState(user.block);
-  const [newPassword, setNewPassword] = useState('');
+
+  // Change Password OTP State (Requirement #2.B)
+  const [showChangeModal, setShowChangeModal] = useState(false);
+  const [changeOtp, setChangeOtp] = useState('');
+  const [changeNewPassword, setChangeNewPassword] = useState('');
+  const [changeConfirmPassword, setChangeConfirmPassword] = useState('');
+  const [changeLoading, setChangeLoading] = useState(false);
+  const [changeError, setChangeError] = useState<string | null>(null);
+  const [changeSuccess, setChangeSuccess] = useState<string | null>(null);
+  const [changeCooldown, setChangeCooldown] = useState(0);
+
+  React.useEffect(() => {
+    let timer: ReturnType<typeof setInterval>;
+    if (changeCooldown > 0) {
+      timer = setInterval(() => {
+        setChangeCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [changeCooldown]);
+
+  const handleInitiateChangePassword = async () => {
+    setChangeError(null);
+    setChangeSuccess(null);
+    setChangeLoading(true);
+    try {
+      const token = localStorage.getItem('nesty_web_auth_token') || '';
+      const res = await fetch('/api/auth/change-password/send-otp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setChangeError(data.message || 'Failed to dispatch verification code to your college email.');
+      } else {
+        setShowChangeModal(true);
+        setChangeCooldown(60);
+        setChangeOtp('');
+        setChangeNewPassword('');
+        setChangeConfirmPassword('');
+        setChangeSuccess(data.message || 'Verification code sent to your registered college email.');
+      }
+    } catch {
+      setChangeError('Network error connecting to verification service.');
+    } finally {
+      setChangeLoading(false);
+    }
+  };
+
+  const handleVerifyAndUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setChangeError(null);
+    setChangeSuccess(null);
+
+    if (!changeOtp.trim()) {
+      setChangeError('Invalid OTP');
+      return;
+    }
+
+    if (changeNewPassword.length < 6) {
+      setChangeError('New password must be at least 6 characters.');
+      return;
+    }
+
+    if (changeNewPassword !== changeConfirmPassword) {
+      setChangeError('New password and confirmation do not match.');
+      return;
+    }
+
+    setChangeLoading(true);
+    try {
+      const token = localStorage.getItem('nesty_web_auth_token') || '';
+      const res = await fetch('/api/auth/change-password/verify-update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          otp: changeOtp.trim(),
+          newPassword: changeNewPassword,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        // Display exact server messages: 'Invalid OTP' or 'OTP expired. Please request a new OTP.'
+        setChangeError(data.message || 'Invalid OTP');
+      } else {
+        setChangeSuccess('Password updated successfully!');
+        setTimeout(() => {
+          setShowChangeModal(false);
+          setChangeOtp('');
+          setChangeNewPassword('');
+          setChangeConfirmPassword('');
+          setChangeSuccess(null);
+        }, 1500);
+      }
+    } catch {
+      setChangeError('Network error updating password.');
+    } finally {
+      setChangeLoading(false);
+    }
+  };
 
   return (
     <div data-testid="student_profile_screen" className="max-w-2xl mx-auto space-y-5 pb-24 md:pb-8">
-      <div className="bg-nesty-creamSurface border-[1.5px] border-nesty-gold rounded-3xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {/* Student Profile Card (No block, No coins) */}
+      <div className="bg-nesty-creamSurface border-[1.5px] border-nesty-gold rounded-3xl p-6 flex items-center justify-between gap-4">
         <div className="flex items-center gap-4">
-          <div className="w-16 h-16 rounded-2xl bg-nesty-burgundy text-nesty-cream border-2 border-nesty-gold flex items-center justify-center text-2xl font-extrabold">
+          <div className="w-16 h-16 rounded-2xl bg-nesty-burgundy text-nesty-cream border-2 border-nesty-gold flex items-center justify-center text-2xl font-extrabold shadow-md">
             {user.name.charAt(0).toUpperCase()}
           </div>
           <div>
             <h2 className="text-xl font-extrabold text-nesty-burgundy">{user.name}</h2>
             <p className="text-xs text-nesty-textSecondary">{user.email}</p>
             <span className="inline-block mt-1 px-2.5 py-0.5 rounded-lg bg-nesty-goldLight border border-nesty-gold text-[11px] font-extrabold text-nesty-burgundyDark">
-              Roll No: {user.rollNo || 'Campus Student'} • Block {user.block}
+              Roll No: {user.rollNo || 'Student'}
             </span>
           </div>
-        </div>
-
-        <div className="px-4 py-3 rounded-2xl bg-nesty-goldLight border border-nesty-gold text-center">
-          <div className="flex items-center justify-center gap-1 text-xs font-bold text-nesty-burgundyDark">
-            <Coins className="w-4 h-4 text-nesty-goldDark" />
-            <span>Nesty Coins</span>
-          </div>
-          <div className="text-2xl font-extrabold text-nesty-burgundy mt-0.5">{user.coins}</div>
         </div>
       </div>
 
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onUpdateProfile(name, phone, rollNo, block, newPassword || undefined);
-          setNewPassword('');
+          onUpdateProfile(name, phone, rollNo);
         }}
-        className="bg-nesty-creamSurface border border-nesty-creamBorder rounded-3xl p-6 space-y-4 shadow-sm"
+        className="bg-nesty-creamSurface border border-nesty-creamBorder rounded-3xl p-6 space-y-5 shadow-sm"
       >
         <div className="flex items-center gap-2 text-nesty-burgundy">
           <User className="w-5 h-5" />
@@ -642,11 +732,11 @@ export const StudentProfileView: React.FC<StudentProfileViewProps> = ({
             <input
               type="text"
               value={rollNo}
-              onChange={(e) => setRollNo(e.target.value)}
+              onChange={(e) => setRollNo(e.target.value.toUpperCase())}
               className="w-full px-3.5 py-2.5 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-sm focus:outline-none focus:border-nesty-burgundy"
             />
           </div>
-          <div>
+          <div className="sm:col-span-2">
             <label className="block text-xs font-bold text-nesty-textPrimary mb-1">
               Phone Number
             </label>
@@ -657,35 +747,35 @@ export const StudentProfileView: React.FC<StudentProfileViewProps> = ({
               className="w-full px-3.5 py-2.5 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-sm focus:outline-none focus:border-nesty-burgundy"
             />
           </div>
-          <div>
-            <label className="block text-xs font-bold text-nesty-textPrimary mb-1">
-              Default Pickup Block
-            </label>
-            <select
-              value={block}
-              onChange={(e) => setBlock(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-sm focus:outline-none focus:border-nesty-burgundy"
-            >
-              {CAMPUS_BLOCKS.map((b) => (
-                <option key={b.code} value={b.code}>
-                  {b.code} — {b.name}
-                </option>
-              ))}
-            </select>
-          </div>
         </div>
 
-        <div>
-          <label className="block text-xs font-bold text-nesty-textPrimary mb-1">
-            Change Password (optional)
-          </label>
-          <input
-            type="password"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            placeholder="Leave blank to keep existing password"
-            className="w-full px-3.5 py-2.5 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-sm focus:outline-none focus:border-nesty-burgundy"
-          />
+        {/* Change Password Section (Requirement #2.B: Exact 'Change Password' text & button) */}
+        <div className="pt-4 border-t border-nesty-creamBorder">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <label className="block text-xs font-bold text-nesty-textPrimary mb-0.5">
+                Change Password
+              </label>
+              <p className="text-xs text-nesty-textSecondary">
+                Requires one-time verification code delivered to your registered college email ({user.email}).
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleInitiateChangePassword}
+              disabled={changeLoading}
+              data-testid="initiate_change_password_button"
+              className="px-4 py-2.5 rounded-xl border border-nesty-gold bg-nesty-gold/20 text-nesty-burgundy font-extrabold text-xs hover:bg-nesty-gold/30 transition self-start sm:self-auto disabled:opacity-50"
+            >
+              {changeLoading ? 'Requesting Code...' : 'Change Password'}
+            </button>
+          </div>
+          {changeError && !showChangeModal && (
+            <div className="mt-2 text-xs text-nesty-error flex items-center gap-1 font-semibold">
+              <AlertCircle className="w-3.5 h-3.5" />
+              <span>{changeError}</span>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
@@ -704,10 +794,128 @@ export const StudentProfileView: React.FC<StudentProfileViewProps> = ({
             className="px-5 py-2.5 rounded-xl border border-nesty-error bg-nesty-errorBg text-nesty-error font-extrabold text-xs flex items-center gap-1.5 hover:bg-nesty-error hover:text-white transition"
           >
             <LogOut className="w-4 h-4" />
-            <span>Sign Out of Nesty</span>
+            <span>Sign Out of NESTY</span>
           </button>
         </div>
       </form>
+
+      {/* Change Password OTP Verification Dialog (Requirement #2.B) */}
+      {showChangeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-nesty-textPrimary/60 backdrop-blur-sm animate-fadeIn">
+          <div className="w-full max-w-md bg-nesty-creamSurface border-[1.5px] border-nesty-gold rounded-3xl shadow-2xl p-6">
+            <div className="flex items-start justify-between pb-3 border-b border-nesty-creamBorder">
+              <div className="flex items-center gap-2 text-nesty-burgundy">
+                <KeyRound className="w-5 h-5 text-nesty-gold" />
+                <h3 className="text-lg font-extrabold">Change Password</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowChangeModal(false)}
+                className="text-nesty-textSecondary hover:text-nesty-burgundy p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-nesty-textSecondary mt-3">
+              Enter the 6-digit verification code sent to <strong>{user.email}</strong>, then set your new password.
+            </p>
+
+            {changeError && (
+              <div className="mt-3 p-3 rounded-xl bg-nesty-errorBg border border-nesty-error text-nesty-error text-xs flex items-center gap-2 font-bold">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{changeError}</span>
+              </div>
+            )}
+
+            {changeSuccess && (
+              <div className="mt-3 p-3 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs flex items-center gap-2 font-bold">
+                <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-600" />
+                <span>{changeSuccess}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleVerifyAndUpdatePassword} className="mt-4 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-nesty-textPrimary mb-1">
+                  6-Digit Verification Code
+                </label>
+                <input
+                  type="text"
+                  maxLength={6}
+                  value={changeOtp}
+                  onChange={(e) => setChangeOtp(e.target.value)}
+                  placeholder="e.g. 123456"
+                  required
+                  data-testid="change_password_otp_input"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-sm font-mono tracking-widest text-center focus:outline-none focus:border-nesty-burgundy"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-nesty-textPrimary mb-1">
+                  New Password
+                </label>
+                <input
+                  type="password"
+                  value={changeNewPassword}
+                  onChange={(e) => setChangeNewPassword(e.target.value)}
+                  placeholder="Minimum 6 characters"
+                  required
+                  minLength={6}
+                  data-testid="change_password_new_input"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-sm focus:outline-none focus:border-nesty-burgundy"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-nesty-textPrimary mb-1">
+                  Confirm New Password
+                </label>
+                <input
+                  type="password"
+                  value={changeConfirmPassword}
+                  onChange={(e) => setChangeConfirmPassword(e.target.value)}
+                  placeholder="Re-enter new password"
+                  required
+                  minLength={6}
+                  data-testid="change_password_confirm_input"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-sm focus:outline-none focus:border-nesty-burgundy"
+                />
+              </div>
+
+              <div className="flex items-center justify-between pt-2">
+                <button
+                  type="button"
+                  onClick={handleInitiateChangePassword}
+                  disabled={changeCooldown > 0 || changeLoading}
+                  className="text-xs font-extrabold text-nesty-burgundy hover:underline disabled:text-stone-400"
+                >
+                  {changeCooldown > 0 ? `Resend code in ${changeCooldown}s` : 'Resend Code'}
+                </button>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowChangeModal(false)}
+                    className="px-4 py-2 rounded-xl text-xs font-bold text-stone-600 hover:bg-stone-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={changeLoading}
+                    data-testid="confirm_change_password_button"
+                    className="px-5 py-2 rounded-xl text-xs font-extrabold bg-nesty-burgundy text-nesty-cream hover:bg-nesty-burgundyDark transition shadow disabled:opacity-50"
+                  >
+                    {changeLoading ? 'Updating...' : 'Update Password'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

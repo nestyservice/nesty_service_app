@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import QRCode from 'qrcode';
 import {
   AnnouncementRecord,
   CouponRecord,
@@ -9,12 +10,17 @@ import {
 import {
   Bell,
   CheckCircle2,
+  Clock,
+  Download,
   Edit3,
   Image,
   PackagePlus,
   Plus,
+  Printer,
+  QrCode,
   Receipt,
   RefreshCw,
+  Search,
   Tag,
   ToggleLeft,
   ToggleRight,
@@ -22,6 +28,7 @@ import {
   Users,
   UtensilsCrossed,
   X,
+  XCircle,
 } from 'lucide-react';
 
 interface AdminDashboardViewProps {
@@ -59,7 +66,7 @@ interface AdminDashboardViewProps {
   onRefreshAll: () => void;
 }
 
-type AdminSection = 'PRODUCTS' | 'ORDERS' | 'STUDENTS' | 'COUPONS' | 'ANNOUNCEMENTS';
+type AdminSection = 'PRODUCTS' | 'ORDERS' | 'VENDING_QR' | 'STUDENTS' | 'COUPONS' | 'ANNOUNCEMENTS';
 
 const PRESET_PRODUCT_IMAGES = [
   { label: 'Samosa', url: 'https://deliz-canteen.onrender.com/images/samosa.png' },
@@ -91,6 +98,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<AdminSection>('PRODUCTS');
 
+  // Product modal state
   const [showProductModal, setShowProductModal] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | undefined>(undefined);
   const [prodName, setProdName] = useState('');
@@ -105,13 +113,74 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [prodFormError, setProdFormError] = useState<string | null>(null);
   const [isSavingProduct, setIsSavingProduct] = useState(false);
 
+  // Orders filters state (Requirement #11)
+  const [orderSearch, setOrderSearch] = useState('');
+  const [orderStatusFilter, setOrderStatusFilter] = useState('ALL');
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState('ALL');
+
+  // Vending machine QR state (Requirement #10)
+  const [machineId, setMachineId] = useState('VM-NESTY-01');
+  const [configuredAppUrl, setConfiguredAppUrl] = useState<string>('https://nesty-service-app.onrender.com');
+  const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [isGeneratingQr, setIsGeneratingQr] = useState(false);
+
+  // Coupons form
   const [cpnCode, setCpnCode] = useState('');
   const [cpnPercent, setCpnPercent] = useState('15');
   const [cpnMax, setCpnMax] = useState('30');
   const [cpnMin, setCpnMin] = useState('40');
 
+  // Announcements form
   const [annTitle, setAnnTitle] = useState('');
   const [annMsg, setAnnMsg] = useState('');
+
+  // Fetch Vending Machine destination configuration from backend
+  useEffect(() => {
+    fetch('/api/admin/vending-qr-config', {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('nesty_web_auth_token') || ''}`,
+      },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && data.appUrl) {
+          setConfiguredAppUrl(data.appUrl);
+          if (data.defaultMachineId) setMachineId(data.defaultMachineId);
+        }
+      })
+      .catch(() => {
+        // Fallback to origin
+        if (typeof window !== 'undefined') {
+          setConfiguredAppUrl(window.location.origin);
+        }
+      });
+  }, []);
+
+  // Generate static QR code from destination URL (Requirement #10)
+  useEffect(() => {
+    const destinationUrl = `${configuredAppUrl}/?source=vending_machine&machineId=${encodeURIComponent(
+      machineId.trim() || 'VM-NESTY-01'
+    )}`;
+
+    setIsGeneratingQr(true);
+    QRCode.toDataURL(destinationUrl, {
+      width: 380,
+      margin: 2,
+      color: {
+        dark: '#701F2B',
+        light: '#FFFFFF',
+      },
+      errorCorrectionLevel: 'H',
+    })
+      .then((url) => {
+        setQrDataUrl(url);
+        setIsGeneratingQr(false);
+      })
+      .catch((err) => {
+        console.error('Failed to generate vending QR code:', err);
+        setIsGeneratingQr(false);
+      });
+  }, [configuredAppUrl, machineId]);
 
   const openAddProductModal = () => {
     setEditingItemId(undefined);
@@ -190,6 +259,25 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     }
   };
 
+  // Filter orders according to search & status selections (Requirement #11)
+  const filteredOrders = orders.filter((order) => {
+    const q = orderSearch.trim().toLowerCase();
+    const matchesSearch =
+      !q ||
+      order.id.toLowerCase().includes(q) ||
+      order.studentName.toLowerCase().includes(q) ||
+      order.studentEmail.toLowerCase().includes(q) ||
+      order.transactionId.toLowerCase().includes(q);
+
+    const matchesOrderStatus =
+      orderStatusFilter === 'ALL' || order.orderStatus.toUpperCase() === orderStatusFilter;
+
+    const matchesPaymentStatus =
+      paymentStatusFilter === 'ALL' || order.paymentStatus.toUpperCase() === paymentStatusFilter;
+
+    return matchesSearch && matchesOrderStatus && matchesPaymentStatus;
+  });
+
   const paidOrders = orders.filter(
     (o) => o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS'
   );
@@ -198,18 +286,22 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     (o) => o.orderStatus !== 'CLAIMED' && o.orderStatus !== 'CANCELLED'
   ).length;
 
+  const currentDestinationUrl = `${configuredAppUrl}/?source=vending_machine&machineId=${encodeURIComponent(
+    machineId.trim() || 'VM-NESTY-01'
+  )}`;
+
   return (
     <div data-testid="admin_dashboard_screen" className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+      {/* Admin Command Banner */}
       <div className="rounded-3xl bg-gradient-to-r from-nesty-burgundyDark via-nesty-burgundy to-nesty-burgundyLight border-2 border-nesty-gold p-6 text-nesty-cream shadow-xl">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <span className="text-xs font-extrabold uppercase tracking-widest text-nesty-gold">
-              NESTY ADMIN PORTAL • AUTHORITATIVE SHARED DATABASE
+              NESTY CANTEEN CONTROL PANEL
             </span>
-            <h1 className="text-2xl font-extrabold mt-1">Canteen Command & Product Catalog</h1>
+            <h1 className="text-2xl font-extrabold mt-1">Canteen Operations & Catalog</h1>
             <p className="text-xs sm:text-sm text-nesty-cream/85 mt-0.5">
-              Products saved here persist in the shared backend and immediately appear on the
-              Student Menu across Web and Android.
+              Authoritative management of products, all student orders, and static vending machine QR codes.
             </p>
           </div>
 
@@ -231,7 +323,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               className="px-3.5 py-3 rounded-2xl bg-nesty-cream/15 hover:bg-nesty-cream/25 border border-nesty-gold text-xs font-bold flex items-center gap-1.5 transition"
             >
               <RefreshCw className="w-4 h-4 text-nesty-gold" />
-              <span>Sync</span>
+              <span>Sync All</span>
             </button>
           </div>
         </div>
@@ -242,33 +334,40 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             <div className="text-xl font-extrabold mt-0.5">₹{totalRevenue}</div>
           </div>
           <div className="p-3 rounded-2xl bg-nesty-burgundyDark/60 border border-nesty-gold/40">
-            <div className="text-[11px] font-bold text-nesty-gold uppercase">Active Orders</div>
+            <div className="text-[11px] font-bold text-nesty-gold uppercase">Pending Orders</div>
             <div className="text-xl font-extrabold mt-0.5">{pendingPickupCount}</div>
           </div>
           <div className="p-3 rounded-2xl bg-nesty-burgundyDark/60 border border-nesty-gold/40">
-            <div className="text-[11px] font-bold text-nesty-gold uppercase">Menu Products</div>
+            <div className="text-[11px] font-bold text-nesty-gold uppercase">Catalog Items</div>
             <div className="text-xl font-extrabold mt-0.5">{menuItems.length}</div>
           </div>
           <div className="p-3 rounded-2xl bg-nesty-burgundyDark/60 border border-nesty-gold/40">
-            <div className="text-[11px] font-bold text-nesty-gold uppercase">Students</div>
+            <div className="text-[11px] font-bold text-nesty-gold uppercase">Registered Students</div>
             <div className="text-xl font-extrabold mt-0.5">{students.length}</div>
           </div>
         </div>
       </div>
 
+      {/* Navigation Tabs (Products, Orders, Vending Machine QR, Students, Coupons, Announcements) */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
         {[
           {
             id: 'PRODUCTS' as const,
-            label: `Add / Manage Products (${menuItems.length})`,
+            label: `Menu Products (${menuItems.length})`,
             icon: <UtensilsCrossed className="w-4 h-4" />,
             testId: 'admin_tab_products',
           },
           {
             id: 'ORDERS' as const,
-            label: `Orders & Payments (${orders.length})`,
+            label: `All Orders (${orders.length})`,
             icon: <Receipt className="w-4 h-4" />,
             testId: 'admin_tab_orders',
+          },
+          {
+            id: 'VENDING_QR' as const,
+            label: 'Vending Machine QR',
+            icon: <QrCode className="w-4 h-4" />,
+            testId: 'admin_tab_vending_qr',
           },
           {
             id: 'STUDENTS' as const,
@@ -309,15 +408,16 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         })}
       </div>
 
+      {/* SECTION 1: PRODUCTS CATALOG */}
       {activeTab === 'PRODUCTS' && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3 bg-nesty-creamSurface border border-nesty-gold rounded-2xl p-4">
             <div>
               <h2 className="text-lg font-extrabold text-nesty-burgundy">
-                Authoritative Product Catalog
+                Menu & Price Management
               </h2>
               <p className="text-xs text-nesty-textSecondary">
-                Add new dishes, edit prices, upload images, or toggle real-time availability.
+                Add canteen items, update pricing in INR, or toggle real-time stock availability.
               </p>
             </div>
             <button
@@ -424,76 +524,280 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         </div>
       )}
 
+      {/* SECTION 2: ALL ORDERS & MANAGEMENT (Requirement #11) */}
       {activeTab === 'ORDERS' && (
-        <div className="space-y-3">
-          {orders.map((order) => (
-            <div
-              key={order.id}
-              data-testid={`admin_order_row_${order.id}`}
-              className="bg-nesty-creamSurface border-[1.5px] border-nesty-gold/80 rounded-3xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
-            >
-              <div
-                onClick={() => onOpenOrderDetails(order)}
-                className="cursor-pointer space-y-1.5 flex-1"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="px-3 py-1 rounded-xl bg-nesty-burgundy text-nesty-cream text-xs font-extrabold">
-                    #{order.id}
-                  </span>
-                  <span className="px-2.5 py-1 rounded-xl bg-nesty-goldLight border border-nesty-gold text-xs font-bold text-nesty-burgundyDark">
-                    Block {order.block}
-                  </span>
-                  <span className="text-xs font-mono font-bold text-nesty-burgundy">
-                    Txn: {order.transactionId}
-                  </span>
-                  <span
-                    className={`px-2.5 py-0.5 rounded-lg text-[11px] font-extrabold ${
-                      order.paymentStatus === 'FAILED'
-                        ? 'bg-nesty-errorBg text-nesty-error'
-                        : 'bg-nesty-successBg text-nesty-success'
-                    }`}
-                  >
-                    {order.paymentStatus}
-                  </span>
-                </div>
-
-                <div className="text-sm font-extrabold text-nesty-textPrimary">
-                  {order.items.map((it) => `${it.quantity}x ${it.name}`).join(', ')} — ₹
-                  {order.finalAmount}
-                </div>
-
-                <div className="text-xs text-nesty-textSecondary">
-                  Student: <span className="font-bold">{order.studentName}</span> (
-                  {order.studentEmail}) • {order.paymentMethod}
-                </div>
+        <div className="space-y-4">
+          {/* Orders Filter & Search Controls */}
+          <div className="bg-nesty-creamSurface border border-nesty-gold rounded-2xl p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row gap-2.5">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-nesty-burgundy absolute left-3.5 top-3" />
+                <input
+                  type="text"
+                  value={orderSearch}
+                  onChange={(e) => setOrderSearch(e.target.value)}
+                  placeholder="Search by Order ID, Student Name, Email, or Transaction ID..."
+                  data-testid="admin_order_search_input"
+                  className="w-full pl-10 pr-4 py-2 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-sm focus:outline-none focus:border-nesty-burgundy"
+                />
               </div>
 
-              {order.paymentStatus !== 'FAILED' && (
-                <div className="flex flex-wrap items-center gap-2">
-                  {(['PREPARING', 'READY', 'CLAIMED'] as const).map((st) => {
-                    const active = order.orderStatus === st;
-                    return (
-                      <button
-                        key={st}
-                        type="button"
-                        onClick={() => onUpdateOrderStatus(order.id, st)}
-                        className={`px-3.5 py-2 rounded-xl text-xs font-extrabold border transition ${
-                          active
-                            ? 'bg-nesty-gold text-nesty-textPrimary border-nesty-burgundy'
-                            : 'bg-nesty-creamElevated text-nesty-burgundy border-nesty-gold hover:bg-nesty-burgundy hover:text-nesty-cream'
-                        }`}
-                      >
-                        {st}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+              <div className="flex gap-2">
+                <select
+                  value={orderStatusFilter}
+                  onChange={(e) => setOrderStatusFilter(e.target.value)}
+                  data-testid="admin_order_status_filter"
+                  className="px-3 py-2 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-xs font-bold text-nesty-textPrimary focus:outline-none"
+                >
+                  <option value="ALL">All Order Statuses</option>
+                  <option value="PENDING_PICKUP">Pending Pickup</option>
+                  <option value="PREPARING">Preparing</option>
+                  <option value="READY">Ready</option>
+                  <option value="CLAIMED">Claimed</option>
+                  <option value="CANCELLED">Cancelled</option>
+                </select>
+
+                <select
+                  value={paymentStatusFilter}
+                  onChange={(e) => setPaymentStatusFilter(e.target.value)}
+                  data-testid="admin_payment_status_filter"
+                  className="px-3 py-2 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-xs font-bold text-nesty-textPrimary focus:outline-none"
+                >
+                  <option value="ALL">All Payment Statuses</option>
+                  <option value="PAID">Paid Only</option>
+                  <option value="FAILED">Failed / Cancelled</option>
+                </select>
+              </div>
             </div>
-          ))}
+
+            <div className="flex items-center justify-between text-xs text-nesty-textSecondary pt-1">
+              <span>
+                Showing <strong>{filteredOrders.length}</strong> of {orders.length} campus orders
+              </span>
+              <button
+                type="button"
+                onClick={onRefreshAll}
+                className="text-nesty-burgundy font-bold flex items-center gap-1 hover:underline"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Refresh Orders
+              </button>
+            </div>
+          </div>
+
+          {filteredOrders.length === 0 ? (
+            <div className="bg-nesty-creamSurface border border-nesty-creamBorder rounded-3xl p-12 text-center">
+              <Receipt className="w-12 h-12 text-nesty-goldDark mx-auto mb-2" />
+              <h3 className="text-base font-extrabold text-nesty-burgundy">No orders matching criteria</h3>
+              <p className="text-xs text-nesty-textSecondary mt-1">
+                Try modifying your search term or clearing the status filters.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filteredOrders.map((order) => {
+                const isPaid = order.paymentStatus === 'PAID' || order.paymentStatus === 'SUCCESS';
+                return (
+                  <div
+                    key={order.id}
+                    data-testid={`admin_order_row_${order.id}`}
+                    className="bg-nesty-creamSurface border-[1.5px] border-nesty-gold/80 rounded-3xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                  >
+                    <div
+                      onClick={() => onOpenOrderDetails(order)}
+                      className="cursor-pointer space-y-1.5 flex-1"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="px-3 py-1 rounded-xl bg-nesty-burgundy text-nesty-cream text-xs font-extrabold">
+                          #{order.id}
+                        </span>
+                        <span className="text-xs font-mono font-bold text-nesty-burgundy">
+                          Txn: {order.transactionId}
+                        </span>
+                        <span
+                          className={`px-2.5 py-0.5 rounded-lg text-[11px] font-extrabold ${
+                            isPaid
+                              ? 'bg-nesty-successBg text-nesty-success border border-nesty-success'
+                              : 'bg-nesty-errorBg text-nesty-error border border-nesty-error'
+                          }`}
+                        >
+                          Payment: {order.paymentStatus}
+                        </span>
+                        <span className="px-2.5 py-0.5 rounded-lg bg-nesty-goldLight border border-nesty-gold text-[11px] font-extrabold text-nesty-burgundyDark">
+                          Order: {order.orderStatus}
+                        </span>
+                      </div>
+
+                      <div className="text-sm font-extrabold text-nesty-textPrimary">
+                        {order.items.map((it) => `${it.quantity}x ${it.name}`).join(', ')} — Total: ₹
+                        {order.finalAmount}
+                      </div>
+
+                      <div className="text-xs text-nesty-textSecondary flex flex-wrap items-center gap-2">
+                        <span>
+                          Student: <strong className="text-nesty-textPrimary">{order.studentName}</strong> (
+                          {order.studentEmail})
+                        </span>
+                        <span>•</span>
+                        <span>{order.createdAt.replace('T', ' ').slice(0, 16)}</span>
+                        <span>•</span>
+                        <span>{order.paymentMethod}</span>
+                      </div>
+                    </div>
+
+                    {order.paymentStatus !== 'FAILED' && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {(['PREPARING', 'READY', 'CLAIMED'] as const).map((st) => {
+                          const active = order.orderStatus === st;
+                          return (
+                            <button
+                              key={st}
+                              type="button"
+                              onClick={() => onUpdateOrderStatus(order.id, st)}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border transition ${
+                                active
+                                  ? 'bg-nesty-gold text-nesty-textPrimary border-nesty-burgundy shadow-sm'
+                                  : 'bg-nesty-creamElevated text-nesty-burgundy border-nesty-gold hover:bg-nesty-burgundy hover:text-nesty-cream'
+                              }`}
+                            >
+                              {st}
+                            </button>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          onClick={() => onOpenOrderDetails(order)}
+                          className="px-3 py-1.5 rounded-xl bg-nesty-burgundy text-nesty-cream text-xs font-bold hover:bg-nesty-burgundyDark"
+                        >
+                          View Bill →
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
+      {/* SECTION 3: VENDING MACHINE STATIC QR CODE (Requirement #10) */}
+      {activeTab === 'VENDING_QR' && (
+        <div className="max-w-2xl mx-auto space-y-5">
+          <div className="bg-nesty-creamSurface border-2 border-nesty-gold rounded-3xl p-6 sm:p-8 text-center space-y-4 shadow-xl">
+            <div>
+              <span className="text-[11px] font-extrabold tracking-widest uppercase text-nesty-goldDark">
+                CAMPUS VENDING MACHINE ACCESS
+              </span>
+              <h2 className="text-2xl font-extrabold text-nesty-burgundy mt-1">
+                Static Vending Machine QR Code
+              </h2>
+              <p className="text-xs sm:text-sm text-nesty-textSecondary max-w-lg mx-auto mt-1">
+                This QR code directs students to the campus food ordering interface. Print and display this placard
+                on the vending machine. It contains zero sensitive admin credentials.
+              </p>
+            </div>
+
+            {/* Destination Configuration Controls */}
+            <div className="bg-nesty-creamElevated border border-nesty-creamBorder rounded-2xl p-4 text-left space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-nesty-textPrimary mb-1">
+                    Vending Machine Identifier
+                  </label>
+                  <input
+                    type="text"
+                    value={machineId}
+                    onChange={(e) => setMachineId(e.target.value.toUpperCase())}
+                    placeholder="VM-NESTY-01"
+                    data-testid="vending_machine_id_input"
+                    className="w-full px-3.5 py-2 rounded-xl bg-nesty-cream border border-nesty-gold text-xs font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-nesty-textPrimary mb-1">
+                    Configured Application URL
+                  </label>
+                  <input
+                    type="text"
+                    value={configuredAppUrl}
+                    onChange={(e) => setConfiguredAppUrl(e.target.value)}
+                    placeholder="https://nesty-service-app.onrender.com"
+                    data-testid="vending_app_url_input"
+                    className="w-full px-3.5 py-2 rounded-xl bg-nesty-cream border border-nesty-gold text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="text-[11px] font-mono text-nesty-textSecondary break-all bg-nesty-creamSurface p-2 rounded-xl border border-nesty-creamBorder">
+                <strong>QR Destination Target:</strong> {currentDestinationUrl}
+              </div>
+            </div>
+
+            {/* High-Resolution QR Display */}
+            <div className="py-2 flex flex-col items-center justify-center">
+              <div className="p-4 bg-white border-4 border-nesty-gold rounded-3xl shadow-xl flex flex-col items-center">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-6 h-6 rounded-lg bg-nesty-burgundy p-0.5">
+                    <img src="/images/nesty-logo.jpg" alt="NESTY Logo" className="w-full h-full object-contain rounded" />
+                  </div>
+                  <span className="text-sm font-extrabold tracking-wider text-nesty-burgundy">NESTY CANTEEN</span>
+                </div>
+
+                {isGeneratingQr ? (
+                  <div className="w-64 h-64 flex items-center justify-center">
+                    <RefreshCw className="w-8 h-8 text-nesty-burgundy animate-spin" />
+                  </div>
+                ) : qrDataUrl ? (
+                  <img
+                    src={qrDataUrl}
+                    alt={`Static Vending Machine QR for ${machineId}`}
+                    data-testid="vending_machine_qr_image"
+                    className="w-64 h-64 sm:w-72 sm:h-72 object-contain"
+                  />
+                ) : (
+                  <div className="w-64 h-64 flex items-center justify-center text-xs text-nesty-error">
+                    Failed to render QR Code
+                  </div>
+                )}
+
+                <div className="mt-2 text-xs font-extrabold text-nesty-burgundy tracking-wider uppercase">
+                  Machine ID: {machineId || 'VM-NESTY-01'}
+                </div>
+                <div className="text-[10px] text-nesty-textSecondary">
+                  Scan to browse menu & order food
+                </div>
+              </div>
+            </div>
+
+            {/* Print & Download Actions */}
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+              {qrDataUrl && (
+                <a
+                  href={qrDataUrl}
+                  download={`nesty-vending-qr-${machineId || '01'}.png`}
+                  data-testid="download_vending_qr_button"
+                  className="px-5 py-3 rounded-2xl bg-nesty-burgundy text-nesty-cream border border-nesty-gold font-extrabold text-xs flex items-center gap-2 hover:bg-nesty-burgundyDark transition shadow-md"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Download QR Image (PNG)</span>
+                </a>
+              )}
+
+              <button
+                type="button"
+                onClick={() => window.print()}
+                data-testid="print_vending_qr_button"
+                className="px-5 py-3 rounded-2xl bg-nesty-gold text-nesty-textPrimary border border-nesty-cream font-extrabold text-xs flex items-center gap-2 hover:bg-nesty-goldLight transition shadow-md"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Print Vending Placard</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SECTION 4: STUDENTS LIST (No blocks, No coins) */}
       {activeTab === 'STUDENTS' && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {students.map((stu) => (
@@ -505,17 +809,18 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 <div className="text-sm font-extrabold text-nesty-burgundy">{stu.name}</div>
                 <div className="text-xs text-nesty-textSecondary">{stu.email}</div>
                 <div className="text-[11px] font-semibold text-nesty-textPrimary mt-1">
-                  Roll: {stu.rollNo || 'N/A'} • Block {stu.block}
+                  Roll No: {stu.rollNo || 'N/A'} {stu.phone ? `• ${stu.phone}` : ''}
                 </div>
               </div>
               <div className="px-3 py-1.5 rounded-xl bg-nesty-goldLight border border-nesty-gold text-xs font-extrabold text-nesty-burgundyDark">
-                {stu.coins} Coins
+                Student
               </div>
             </div>
           ))}
         </div>
       )}
 
+      {/* SECTION 5: COUPONS */}
       {activeTab === 'COUPONS' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           <form
@@ -610,6 +915,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         </div>
       )}
 
+      {/* SECTION 6: ANNOUNCEMENTS */}
       {activeTab === 'ANNOUNCEMENTS' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           <form
@@ -630,7 +936,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 type="text"
                 value={annTitle}
                 onChange={(e) => setAnnTitle(e.target.value)}
-                placeholder="Hot Puffs Ready at CB Counter"
+                placeholder="Hot Puffs Ready at Canteen"
                 required
                 className="w-full px-3 py-2 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-xs"
               />
@@ -677,6 +983,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         </div>
       )}
 
+      {/* Product Add / Edit Modal */}
       {showProductModal && (
         <div
           onClick={() => setShowProductModal(false)}

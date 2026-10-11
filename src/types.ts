@@ -25,21 +25,36 @@ export interface OrderRecord {
   studentEmail: string;
   studentName: string;
   studentPhone: string;
-  block: string;
+  block?: string;
   items: OrderItem[];
   totalAmount: number;
   discount: number;
   finalAmount: number;
-  coinsEarned: number;
-  coinsRedeemed: number;
+  coinsEarned?: number;
+  coinsRedeemed?: number;
   paymentMethod: string;
   transactionId: string;
   razorpayOrderId?: string | null;
-  paymentStatus: 'PAID' | 'SUCCESS' | 'FAILED';
+  paymentStatus: 'PAID' | 'SUCCESS' | 'FAILED' | 'PENDING';
   orderStatus: 'PENDING_PICKUP' | 'PREPARING' | 'READY' | 'CLAIMED' | 'CANCELLED';
   failureReason?: string;
   claimedBy?: string | null;
   claimedAt?: string | null;
+  createdAt: string;
+}
+
+export interface PaymentRecord {
+  id: string;
+  orderId: string;
+  studentEmail: string;
+  studentName: string;
+  amount: number;
+  currency: string;
+  paymentMethod: string;
+  transactionId: string;
+  razorpayOrderId?: string | null;
+  status: 'PAID' | 'SUCCESS' | 'FAILED' | 'PENDING';
+  failureReason?: string;
   createdAt: string;
 }
 
@@ -49,9 +64,9 @@ export interface UserAccount {
   name: string;
   phone: string;
   rollNo: string;
-  block: string;
+  block?: string;
   role: 'student' | 'admin';
-  coins: number;
+  coins?: number;
   createdAt: string;
 }
 
@@ -73,17 +88,9 @@ export interface AnnouncementRecord {
 
 export interface QrValidationResult {
   valid: boolean;
-  type: 'ORDER_RECEIPT' | 'PROMO_COUPON' | 'CAMPUS_COUNTER' | 'INVALID';
+  type: 'ORDER_RECEIPT' | 'PROMO_COUPON' | 'INVALID';
   title: string;
   subtitle: string;
   order?: OrderRecord;
   couponCode?: string;
-  block?: string;
 }
-
-export const CAMPUS_BLOCKS = [
-  { id: 'CB', code: 'CB', name: 'Civil Block' },
-  { id: 'CM', code: 'CM', name: 'Computer Science and Mechanical Block' },
-  { id: 'FB', code: 'FB', name: 'First year Block' },
-  { id: 'PG', code: 'PG', name: 'Post Graduate Block' },
-];

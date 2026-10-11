@@ -1,6 +1,6 @@
 import React from 'react';
 import { OrderRecord } from '../types';
-import { CheckCircle2, Clock, Coins, Receipt, X } from 'lucide-react';
+import { CheckCircle2, Clock, Printer, Receipt, X } from 'lucide-react';
 
 interface OrderReceiptModalProps {
   order: OrderRecord | null;
@@ -35,16 +35,20 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
     }
   })();
 
+  const handlePrintReceipt = () => {
+    window.print();
+  };
+
   return (
     <div
       onClick={onClose}
       data-testid="order_receipt_modal_backdrop"
-      className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto backdrop-blur-sm"
     >
       <div
         onClick={(e) => e.stopPropagation()}
         data-testid="order_receipt_modal_card"
-        className="w-full max-w-md bg-nesty-creamSurface border-2 border-nesty-gold rounded-[28px] shadow-2xl p-6 max-h-[90vh] overflow-y-auto"
+        className="w-full max-w-md bg-nesty-creamSurface border-2 border-nesty-gold rounded-[28px] shadow-2xl p-6 max-h-[92vh] overflow-y-auto print:max-h-none print:shadow-none print:border-none"
       >
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -54,20 +58,20 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
             </div>
             <div>
               <h2 className="text-lg font-extrabold text-nesty-burgundy">Order #{order.id}</h2>
-              <p className="text-xs text-nesty-textSecondary">Digital Order & Payment Receipt</p>
+              <p className="text-xs text-nesty-textSecondary">Official Canteen Receipt & Bill</p>
             </div>
           </div>
           <button
             onClick={onClose}
             data-testid="close_receipt_modal_button"
-            className="p-2 rounded-xl text-nesty-burgundy hover:bg-nesty-creamElevated"
+            className="p-2 rounded-xl text-nesty-burgundy hover:bg-nesty-creamElevated print:hidden"
             aria-label="Close Receipt"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Status & Transaction ID Banner (Strictly NO QR Code generated or displayed!) */}
+        {/* Status & Transaction ID Banner */}
         <div
           className={`mt-4 rounded-2xl p-4 border-2 text-center ${
             isClaimed
@@ -97,7 +101,7 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
             className="mt-2.5 inline-block bg-nesty-creamSurface border border-nesty-gold rounded-xl px-4 py-2"
           >
             <div className="text-[10px] font-bold uppercase tracking-wider text-nesty-textSecondary">
-              TRANSACTION ID
+              TRANSACTION ID / PAYMENT REFERENCE
             </div>
             <div className="text-sm font-mono font-extrabold text-nesty-burgundy">
               {order.transactionId}
@@ -106,12 +110,12 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
 
           <p className="mt-2 text-xs text-nesty-textPrimary">
             {isClaimed
-              ? `Picked up at ${order.block} Block Counter${order.claimedBy ? ` (${order.claimedBy})` : ''}`
-              : `Present Order #${order.id} or Transaction ID at the ${order.block} Block Counter for pickup.`}
+              ? `Picked up at Canteen Counter${order.claimedBy ? ` (${order.claimedBy})` : ''}`
+              : `Present Order #${order.id} or Transaction ID at the Canteen Counter for pickup.`}
           </p>
         </div>
 
-        {/* Student & Campus Block Info */}
+        {/* Student & Payment Info */}
         <div className="mt-4 bg-nesty-creamElevated border border-nesty-creamBorder rounded-2xl p-3.5 space-y-1.5 text-xs">
           <div className="flex justify-between">
             <span className="text-nesty-textSecondary">Student Name</span>
@@ -123,7 +127,7 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
           </div>
           <div className="flex justify-between">
             <span className="text-nesty-textSecondary">Pickup Location</span>
-            <span className="font-bold text-nesty-textPrimary">{order.block} Block Canteen</span>
+            <span className="font-bold text-nesty-textPrimary">Nesty Canteen Counter</span>
           </div>
           <div className="flex justify-between">
             <span className="text-nesty-textSecondary">Payment Method</span>
@@ -134,7 +138,7 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
             <span className="font-bold text-nesty-textPrimary">{order.paymentStatus}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-nesty-textSecondary">Order Timestamp</span>
+            <span className="text-nesty-textSecondary">Order Date & Time</span>
             <span className="font-bold text-nesty-textPrimary">
               {order.createdAt.replace('T', ' ').replace('Z', '').slice(0, 19)}
             </span>
@@ -163,20 +167,6 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
               <span className="font-bold text-nesty-success">-₹{order.discount}</span>
             </div>
           )}
-          {order.coinsRedeemed > 0 && (
-            <div className="flex justify-between text-xs">
-              <span className="text-nesty-textSecondary">Nesty Coins Redeemed</span>
-              <span className="font-bold text-nesty-goldDark">-₹{order.coinsRedeemed}</span>
-            </div>
-          )}
-          {order.coinsEarned > 0 && (
-            <div className="flex justify-between items-center text-xs">
-              <span className="flex items-center gap-1 font-bold text-nesty-goldDark">
-                <Coins className="w-3.5 h-3.5" /> Coins Earned
-              </span>
-              <span className="font-bold text-nesty-goldDark">+{order.coinsEarned} Coins</span>
-            </div>
-          )}
 
           <div className="flex justify-between items-center pt-1">
             <span className="text-sm font-extrabold text-nesty-textPrimary">Total Amount Paid</span>
@@ -186,9 +176,9 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
 
         {/* Admin Order Status Controls */}
         {isAdmin && order.paymentStatus !== 'FAILED' && (
-          <div className="mt-4">
+          <div className="mt-4 print:hidden">
             <div className="text-[11px] font-extrabold uppercase tracking-wider text-nesty-burgundy mb-2">
-              ADMIN ORDER STATUS UPDATE:
+              ADMIN STATUS UPDATE:
             </div>
             <div className="grid grid-cols-3 gap-2">
               {(['PREPARING', 'READY', 'CLAIMED'] as const).map((st) => {
@@ -211,13 +201,24 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
           </div>
         )}
 
-        <button
-          onClick={onClose}
-          data-testid="done_receipt_button"
-          className="mt-5 w-full py-3 rounded-xl bg-nesty-burgundy text-nesty-cream font-extrabold text-sm hover:bg-nesty-burgundyDark transition"
-        >
-          Close Receipt
-        </button>
+        {/* Printable / Downloadable Bill Action Buttons */}
+        <div className="mt-5 flex gap-2.5 print:hidden">
+          <button
+            onClick={handlePrintReceipt}
+            data-testid="print_receipt_button"
+            className="flex-1 py-3 rounded-xl border border-nesty-gold bg-nesty-goldLight text-nesty-burgundy font-extrabold text-xs flex items-center justify-center gap-1.5 hover:bg-nesty-gold transition shadow-sm"
+          >
+            <Printer className="w-4 h-4" />
+            <span>Print / Save Receipt</span>
+          </button>
+          <button
+            onClick={onClose}
+            data-testid="done_receipt_button"
+            className="flex-1 py-3 rounded-xl bg-nesty-burgundy text-nesty-cream font-extrabold text-xs hover:bg-nesty-burgundyDark transition"
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );
