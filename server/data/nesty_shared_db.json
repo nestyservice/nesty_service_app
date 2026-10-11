@@ -125,6 +125,17 @@
       "emailVerified": true,
       "passwordHash": "5b1a0bb5735c558becb2cf32633ae3682d7d0df97940a0980053401fb0094812",
       "createdAt": "2026-10-11T13:37:33.778Z"
+    },
+    {
+      "email": "fresh_student_1791732253876@cvr.ac.in",
+      "id": "usr_51665dd3",
+      "name": "Fresh Student",
+      "phone": "9848012345",
+      "rollNo": "24B81A3797",
+      "role": "student",
+      "emailVerified": true,
+      "passwordHash": "5b1a0bb5735c558becb2cf32633ae3682d7d0df97940a0980053401fb0094812",
+      "createdAt": "2026-10-11T15:24:13.877Z"
     }
   ],
   "coupons": [
@@ -154,6 +165,32 @@
     }
   ],
   "orders": [
+    {
+      "id": "NST-2364",
+      "studentEmail": "student@cvr.ac.in",
+      "studentName": "Aarav Reddy",
+      "studentPhone": "9848012345",
+      "items": [
+        {
+          "id": "samosa",
+          "name": "Samosa",
+          "price": 12,
+          "quantity": 2,
+          "isVeg": true
+        }
+      ],
+      "totalAmount": 24,
+      "discount": 0,
+      "finalAmount": 24,
+      "paymentMethod": "Razorpay UPI / Online",
+      "transactionId": "pay_rzp_ver_1791732253904",
+      "razorpayOrderId": "order_test_977026b93bbd",
+      "paymentStatus": "PAID",
+      "orderStatus": "PENDING_PICKUP",
+      "claimedBy": null,
+      "claimedAt": null,
+      "createdAt": "2026-10-11T15:24:13.906Z"
+    },
     {
       "id": "NST-9765",
       "studentEmail": "student@cvr.ac.in",
@@ -424,6 +461,19 @@
     }
   ],
   "payments": [
+    {
+      "id": "pmt_pay_rzp_ver_1791732253904",
+      "orderId": "NST-2364",
+      "studentEmail": "student@cvr.ac.in",
+      "studentName": "Aarav Reddy",
+      "amount": 24,
+      "currency": "INR",
+      "paymentMethod": "Razorpay UPI / Online",
+      "transactionId": "pay_rzp_ver_1791732253904",
+      "razorpayOrderId": "order_test_977026b93bbd",
+      "status": "PAID",
+      "createdAt": "2026-10-11T15:24:13.906Z"
+    },
     {
       "id": "pmt_pay_rzp_ver_1791725853829",
       "orderId": "NST-9765",
