@@ -20,3 +20,9 @@ services:
         sync: false
       - key: APP_URL
         value: https://nesty-service-app.onrender.com
+      - key: BREVO_API_KEY
+        sync: false
+      - key: CAMPUS_EMAIL_SENDER
+        sync: false
+      - key: CAMPUS_EMAIL_SENDER_NAME
+        value: "NESTY Campus Canteen"
