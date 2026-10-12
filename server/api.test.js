@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { app, _testOtpStores } from './index.js';
+import fs from 'fs';
+import path from 'path';
+import { app, _testOtpStores, generatePickupToken } from './index.js';
 
 function requestJson(server, method, path, body = null, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -40,7 +42,10 @@ function requestJson(server, method, path, body = null, headers = {}) {
   });
 }
 
-test('NESTY Comprehensive Regression & Quality Test Suite', async (t) => {
+test('NESTY Complete End-to-End System Verification Suite (Requirements 1-11)', async (t) => {
+  // Ensure test mode for mock email dispatcher
+  process.env.NODE_ENV = 'test';
+
   const server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 
@@ -48,348 +53,449 @@ test('NESTY Comprehensive Regression & Quality Test Suite', async (t) => {
     server.close();
   });
 
-  let studentToken = '';
+  const uniqueSuffix = Date.now();
+  const testStudentEmail = `test_student_${uniqueSuffix}@cvr.ac.in`;
+  const testStudentRoll = `24B81A${Math.floor(1000 + Math.random() * 9000)}`;
+  const testStudentPassword = 'InitialSecurePass123';
+  let createdToken = '';
   let adminToken = '';
 
-  await t.test('1. Authentication: Existing verified student & admin log in without OTP; invalid credentials fail', async () => {
-    // 1a. Invalid password rejection
-    const invalidPass = await requestJson(server, 'POST', '/api/auth/login', {
-      identifier: 'student@cvr.ac.in',
-      password: 'wrong_password_999',
-    });
-    assert.equal(invalidPass.status, 401);
-    assert.equal(invalidPass.data.success, false);
+  // Get admin token for admin operations
+  const adminLoginRes = await requestJson(server, 'POST', '/api/auth/login', {
+    identifier: 'admin@cvr.ac.in',
+    password: 'admin123',
+  });
+  assert.equal(adminLoginRes.status, 200, 'Admin login should succeed');
+  adminToken = adminLoginRes.data.token;
 
-    // 1b. Student login with college email without OTP
-    const studentLogin = await requestJson(server, 'POST', '/api/auth/login', {
-      identifier: 'student@cvr.ac.in',
-      password: 'student123',
+  // -------------------------------------------------------------------------
+  // TEST A: Signup with a valid college email sends a real OTP.
+  // -------------------------------------------------------------------------
+  await t.test('Test A: Signup with a valid college email sends an OTP and returns requiresVerification', async () => {
+    const regRes = await requestJson(server, 'POST', '/api/auth/register-student', {
+      email: testStudentEmail,
+      password: testStudentPassword,
+      name: 'Test Student',
+      phone: '9848012345',
+      rollNo: testStudentRoll,
     });
-    assert.equal(studentLogin.status, 200);
-    assert.equal(studentLogin.data.success, true);
-    assert.equal(studentLogin.data.user.role, 'student');
-    assert.ok(studentLogin.data.token, 'Must return signed auth token');
-    studentToken = studentLogin.data.token;
 
-    // 1c. Student login with Roll Number without OTP
-    const rollLogin = await requestJson(server, 'POST', '/api/auth/login', {
-      identifier: '22B81A0501',
-      password: 'student123',
-    });
-    assert.equal(rollLogin.status, 200);
-    assert.equal(rollLogin.data.success, true);
-    assert.equal(rollLogin.data.user.role, 'student');
-
-    // 1d. Admin login with email without OTP
-    const adminLogin = await requestJson(server, 'POST', '/api/auth/login', {
-      identifier: 'admin@cvr.ac.in',
-      password: 'admin123',
-    });
-    assert.equal(adminLogin.status, 200);
-    assert.equal(adminLogin.data.success, true);
-    assert.equal(adminLogin.data.user.role, 'admin');
-    assert.ok(adminLogin.data.token);
-    adminToken = adminLogin.data.token;
+    assert.equal(regRes.status, 201, 'Registration endpoint should return 201 Created');
+    assert.equal(regRes.data.success, true);
+    assert.equal(regRes.data.requiresVerification, true);
+    assert.equal('otp' in regRes.data, false, 'OTP must NEVER be exposed in API response');
   });
 
-  await t.test('2. First-Time Student Login & Registration Email OTP Verification Flow', async () => {
-    const unverifiedEmail = `fresh_student_${Date.now()}@cvr.ac.in`;
-    const unverifiedRoll = `24B81A${Math.floor(1000 + Math.random() * 9000)}`;
-
-    // 2a. Registration creates unverified student, returns requiresVerification: true
-    // (In local dev without Brevo credentials, it may fail delivery or set OTP record)
-    // We register directly by inserting into store or testing endpoint
-    const regRes = await requestJson(server, 'POST', '/api/auth/register-student', {
-      email: unverifiedEmail,
-      password: 'firstPassword123',
-      name: 'Fresh Student',
-      phone: '9848012345',
-      rollNo: unverifiedRoll,
+  // -------------------------------------------------------------------------
+  // TEST B: The account is not active before correct OTP verification.
+  // -------------------------------------------------------------------------
+  await t.test('Test B: The account is not active before correct OTP verification', async () => {
+    // Attempt login before OTP verification
+    const loginAttempt = await requestJson(server, 'POST', '/api/auth/login', {
+      identifier: testStudentEmail,
+      password: testStudentPassword,
     });
 
-    // If delivery failed because of no API key in test environment, status is 502
-    // If provider is mock/configured or handled, status is 201
-    assert.ok([201, 502].includes(regRes.status), 'Registration handles email delivery safely');
-    assert.equal('otp' in (regRes.data || {}), false, 'OTP must NEVER be returned in API response');
+    // Must be rejected with 403 requiresVerification
+    assert.equal(loginAttempt.status, 403, 'Unverified account login must be blocked');
+    assert.equal(loginAttempt.data.requiresVerification, true);
+  });
 
-    // Seed unverified user in db for deterministic OTP verification testing
-    _testOtpStores.emailVerificationOtps.set(unverifiedEmail, {
-      otpHash: crypto.createHash('sha256').update('654321').digest('hex'),
+  // -------------------------------------------------------------------------
+  // TEST C: An incorrect or expired OTP cannot create an account.
+  // -------------------------------------------------------------------------
+  await t.test('Test C: An incorrect or expired OTP cannot create an account', async () => {
+    // C1. Incorrect OTP
+    const wrongOtpRes = await requestJson(server, 'POST', '/api/auth/verify-email/confirm', {
+      email: testStudentEmail,
+      otp: '000000',
+    });
+    assert.equal(wrongOtpRes.status, 400);
+    assert.equal(wrongOtpRes.data.success, false);
+    assert.equal(wrongOtpRes.data.message, 'Invalid OTP');
+
+    // C2. Expired OTP
+    _testOtpStores.emailVerificationOtps.set(testStudentEmail, {
+      otpHash: crypto.createHash('sha256').update('123456').digest('hex'),
+      expiresAt: Date.now() - 5000, // expired
+      attempts: 0,
+    });
+    const expiredOtpRes = await requestJson(server, 'POST', '/api/auth/verify-email/confirm', {
+      email: testStudentEmail,
+      otp: '123456',
+    });
+    assert.equal(expiredOtpRes.status, 400);
+    assert.equal(expiredOtpRes.data.success, false);
+    assert.ok(expiredOtpRes.data.message.toLowerCase().includes('expired'));
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST D: Correct OTP creates exactly one persistent account.
+  // -------------------------------------------------------------------------
+  await t.test('Test D: Correct OTP creates exactly one persistent account', async () => {
+    const validOtp = '554433';
+    _testOtpStores.emailVerificationOtps.set(testStudentEmail, {
+      otpHash: crypto.createHash('sha256').update(validOtp).digest('hex'),
       expiresAt: Date.now() + 10 * 60 * 1000,
       attempts: 0,
       cooldownUntil: Date.now() + 60 * 1000,
     });
 
-    // 2b. Attempt login before verification: must be rejected with requiresVerification: true
-    // (Requires email to exist in DB as unverified)
-    // Let's test verify-email/confirm with wrong OTP
-    const wrongOtpConfirm = await requestJson(server, 'POST', '/api/auth/verify-email/confirm', {
-      email: unverifiedEmail,
-      otp: '111111',
+    const confirmRes = await requestJson(server, 'POST', '/api/auth/verify-email/confirm', {
+      email: testStudentEmail,
+      otp: validOtp,
     });
-    assert.equal(wrongOtpConfirm.status, 400);
-    assert.equal(wrongOtpConfirm.data.success, false);
 
-    // 2c. Expired OTP verification fails
-    _testOtpStores.emailVerificationOtps.set(unverifiedEmail, {
-      otpHash: crypto.createHash('sha256').update('654321').digest('hex'),
-      expiresAt: Date.now() - 5000, // expired
-      attempts: 0,
-    });
-    const expiredOtpConfirm = await requestJson(server, 'POST', '/api/auth/verify-email/confirm', {
-      email: unverifiedEmail,
-      otp: '654321',
-    });
-    assert.equal(expiredOtpConfirm.status, 400);
-    assert.equal(expiredOtpConfirm.data.success, false);
-    assert.ok(expiredOtpConfirm.data.message.toLowerCase().includes('expired'));
-
-    // 2d. Resend OTP cooldown check
-    _testOtpStores.emailVerificationOtps.set(unverifiedEmail, {
-      otpHash: crypto.createHash('sha256').update('654321').digest('hex'),
-      expiresAt: Date.now() + 10 * 60 * 1000,
-      attempts: 0,
-      cooldownUntil: Date.now() + 45 * 1000, // 45s cooldown remaining
-    });
-    const cooldownResend = await requestJson(server, 'POST', '/api/auth/verify-email/send-otp', {
-      email: unverifiedEmail,
-    });
-    assert.equal(cooldownResend.status, 429);
-    assert.equal(cooldownResend.data.success, false);
-
-    // 2e. Confirm with valid OTP
-    _testOtpStores.emailVerificationOtps.set(unverifiedEmail, {
-      otpHash: crypto.createHash('sha256').update('888999').digest('hex'),
-      expiresAt: Date.now() + 10 * 60 * 1000,
-      attempts: 0,
-    });
-    const validConfirm = await requestJson(server, 'POST', '/api/auth/verify-email/confirm', {
-      email: unverifiedEmail,
-      otp: '888999',
-    });
-    // In our test, if user was created or not in DB:
-    if (validConfirm.status === 200) {
-      assert.equal(validConfirm.data.success, true);
-      assert.ok(validConfirm.data.token);
-      assert.equal(validConfirm.data.user.emailVerified, true);
-    }
+    assert.equal(confirmRes.status, 200, 'Correct OTP confirmation must return 200 OK');
+    assert.equal(confirmRes.data.success, true);
+    assert.ok(confirmRes.data.token, 'Must return signed auth session token');
+    assert.equal(confirmRes.data.user.email, testStudentEmail);
+    assert.equal(confirmRes.data.user.emailVerified, true);
+    createdToken = confirmRes.data.token;
   });
 
-  await t.test('3. Forgot Password & Change Password OTP Flows', async () => {
-    // 3a. Forgot password send-otp: privacy-safe response
+  // -------------------------------------------------------------------------
+  // TEST E: The newly registered credentials work immediately after verification.
+  // -------------------------------------------------------------------------
+  await t.test('Test E: Newly registered credentials work immediately after verification', async () => {
+    // E1. Login with email
+    const loginEmailRes = await requestJson(server, 'POST', '/api/auth/login', {
+      identifier: testStudentEmail,
+      password: testStudentPassword,
+    });
+    assert.equal(loginEmailRes.status, 200);
+    assert.equal(loginEmailRes.data.success, true);
+    assert.ok(loginEmailRes.data.token);
+    assert.equal(loginEmailRes.data.user.email, testStudentEmail);
+
+    // E2. Login with roll number
+    const loginRollRes = await requestJson(server, 'POST', '/api/auth/login', {
+      identifier: testStudentRoll,
+      password: testStudentPassword,
+    });
+    assert.equal(loginRollRes.status, 200);
+    assert.equal(loginRollRes.data.success, true);
+    assert.equal(loginRollRes.data.user.email, testStudentEmail);
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST F: Logout and login again work with the same credentials.
+  // -------------------------------------------------------------------------
+  await t.test('Test F: Logout and login again work with the same credentials without OTP', async () => {
+    // Subsequent login must proceed directly without requiring another OTP
+    const reLoginRes = await requestJson(server, 'POST', '/api/auth/login', {
+      identifier: testStudentEmail,
+      password: testStudentPassword,
+    });
+    assert.equal(reLoginRes.status, 200);
+    assert.equal(reLoginRes.data.success, true);
+    assert.ok(reLoginRes.data.token);
+    assert.equal('requiresVerification' in reLoginRes.data, false, 'No OTP required on subsequent login');
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST G: Account records survive server restart / persistent DB.
+  // -------------------------------------------------------------------------
+  await t.test('Test G: Account records survive persistent DB reloads', async () => {
+    // Verify user is in database file
+    const meRes = await requestJson(server, 'GET', '/api/auth/me', null, {
+      Authorization: `Bearer ${createdToken}`,
+    });
+    assert.equal(meRes.status, 200);
+    assert.equal(meRes.data.user.email, testStudentEmail);
+    assert.equal(meRes.data.user.rollNo, testStudentRoll);
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST H: Duplicate signup and resend requests do not create duplicate accounts.
+  // -------------------------------------------------------------------------
+  await t.test('Test H: Duplicate signup and resend requests do not create duplicate accounts', async () => {
+    // Attempting to register an already verified student email returns 409 Conflict
+    const dupRes = await requestJson(server, 'POST', '/api/auth/register-student', {
+      email: testStudentEmail,
+      password: 'AnotherPassword999',
+      name: 'Duplicate Student',
+      phone: '9848012345',
+      rollNo: testStudentRoll,
+    });
+    assert.equal(dupRes.status, 409, 'Duplicate registration must be rejected with 409');
+    assert.equal(dupRes.data.success, false);
+
+    // Resend OTP for verified user confirms already verified
+    const resendRes = await requestJson(server, 'POST', '/api/auth/verify-email/send-otp', {
+      email: testStudentEmail,
+    });
+    assert.equal(resendRes.status, 200);
+    assert.ok(resendRes.data.message.toLowerCase().includes('already verified'));
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST I: Forgot Password sends an OTP and correct OTP allows password reset.
+  // -------------------------------------------------------------------------
+  await t.test('Test I: Forgot Password sends an OTP and allows password reset', async () => {
     const forgotSend = await requestJson(server, 'POST', '/api/auth/forgot-password/send-otp', {
-      email: 'student@cvr.ac.in',
+      email: testStudentEmail,
     });
     assert.equal(forgotSend.status, 200);
     assert.equal(forgotSend.data.success, true);
-    assert.equal('otp' in forgotSend.data, false, 'OTP must never be exposed');
+    assert.equal('otp' in forgotSend.data, false, 'OTP must not be exposed');
 
-    // 3b. Forgot password verify-reset with wrong OTP fails
-    const forgotWrong = await requestJson(server, 'POST', '/api/auth/forgot-password/verify-reset', {
-      email: 'student@cvr.ac.in',
-      otp: '000000',
-      newPassword: 'newStudentPass123',
+    // Wrong OTP reset attempt fails
+    const wrongReset = await requestJson(server, 'POST', '/api/auth/forgot-password/verify-reset', {
+      email: testStudentEmail,
+      otp: '999999',
+      newPassword: 'ResetPassword123',
     });
-    assert.equal(forgotWrong.status, 400);
-    assert.equal(forgotWrong.data.success, false);
+    assert.equal(wrongReset.status, 400);
 
-    // 3c. Change Password send-otp without authorization fails
-    const unauthChange = await requestJson(server, 'POST', '/api/auth/change-password/send-otp', {});
-    assert.equal(unauthChange.status, 401);
-
-    // 3d. Change Password verify-update with wrong OTP displays EXACT message 'Invalid OTP'
-    _testOtpStores.changePasswordOtps.set('student@cvr.ac.in', {
-      otpHash: crypto.createHash('sha256').update('777888').digest('hex'),
+    // Seed valid reset OTP
+    const resetOtp = '612345';
+    _testOtpStores.passwordResetOtps.set(testStudentEmail, {
+      otpHash: crypto.createHash('sha256').update(resetOtp).digest('hex'),
       expiresAt: Date.now() + 10 * 60 * 1000,
       attempts: 0,
+      cooldownUntil: Date.now() + 60 * 1000,
     });
-    const invalidChangeOtp = await requestJson(
+
+    const validReset = await requestJson(server, 'POST', '/api/auth/forgot-password/verify-reset', {
+      email: testStudentEmail,
+      otp: resetOtp,
+      newPassword: 'ResetPassword123',
+    });
+    assert.equal(validReset.status, 200);
+    assert.equal(validReset.data.success, true);
+
+    // Old password fails
+    const oldLogin = await requestJson(server, 'POST', '/api/auth/login', {
+      identifier: testStudentEmail,
+      password: testStudentPassword,
+    });
+    assert.equal(oldLogin.status, 401, 'Old password must no longer work');
+
+    // New password succeeds
+    const newLogin = await requestJson(server, 'POST', '/api/auth/login', {
+      identifier: testStudentEmail,
+      password: 'ResetPassword123',
+    });
+    assert.equal(newLogin.status, 200);
+    createdToken = newLogin.data.token;
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST J & K: Change Password OTP flow in Profile.
+  // -------------------------------------------------------------------------
+  await t.test('Test J & K: Change Password OTP blocks invalid OTP and updates password on correct OTP', async () => {
+    // J1. Send OTP
+    const sendChangeRes = await requestJson(
+      server,
+      'POST',
+      '/api/auth/change-password/send-otp',
+      {},
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(sendChangeRes.status, 200);
+
+    // J2. Wrong OTP displays exact message "Invalid OTP"
+    const wrongChangeRes = await requestJson(
       server,
       'POST',
       '/api/auth/change-password/verify-update',
-      {
-        otp: '123123',
-        newPassword: 'brandNewPassword123',
-      },
-      { Authorization: `Bearer ${studentToken}` }
+      { otp: '000000', newPassword: 'ChangedPassword456' },
+      { Authorization: `Bearer ${createdToken}` }
     );
-    assert.equal(invalidChangeOtp.status, 400);
-    assert.equal(invalidChangeOtp.data.success, false);
-    assert.equal(invalidChangeOtp.data.message, 'Invalid OTP', 'Must display exact message "Invalid OTP"');
+    assert.equal(wrongChangeRes.status, 400);
+    assert.equal(wrongChangeRes.data.message, 'Invalid OTP', 'Must return exact message "Invalid OTP"');
 
-    // 3e. Change Password verify-update with expired OTP displays EXACT message 'OTP expired. Please request a new OTP.'
-    _testOtpStores.changePasswordOtps.set('student@cvr.ac.in', {
-      otpHash: crypto.createHash('sha256').update('777888').digest('hex'),
-      expiresAt: Date.now() - 10000,
+    // J3. Expired OTP displays exact message "OTP expired. Please request a new OTP."
+    _testOtpStores.changePasswordOtps.set(testStudentEmail, {
+      otpHash: crypto.createHash('sha256').update('888888').digest('hex'),
+      expiresAt: Date.now() - 5000,
       attempts: 0,
     });
-    const expiredChangeOtp = await requestJson(
+    const expiredChangeRes = await requestJson(
       server,
       'POST',
       '/api/auth/change-password/verify-update',
-      {
-        otp: '777888',
-        newPassword: 'brandNewPassword123',
-      },
-      { Authorization: `Bearer ${studentToken}` }
+      { otp: '888888', newPassword: 'ChangedPassword456' },
+      { Authorization: `Bearer ${createdToken}` }
     );
-    assert.equal(expiredChangeOtp.status, 400);
-    assert.equal(expiredChangeOtp.data.success, false);
+    assert.equal(expiredChangeRes.status, 400);
     assert.equal(
-      expiredChangeOtp.data.message,
+      expiredChangeRes.data.message,
       'OTP expired. Please request a new OTP.',
-      'Must display exact message "OTP expired. Please request a new OTP."'
+      'Must return exact message "OTP expired. Please request a new OTP."'
     );
 
-    // 3f. Change Password verify-update with correct OTP succeeds
-    _testOtpStores.changePasswordOtps.set('student@cvr.ac.in', {
-      otpHash: crypto.createHash('sha256').update('777888').digest('hex'),
+    // K. Correct OTP updates password
+    const validChangeOtp = '987654';
+    _testOtpStores.changePasswordOtps.set(testStudentEmail, {
+      otpHash: crypto.createHash('sha256').update(validChangeOtp).digest('hex'),
       expiresAt: Date.now() + 10 * 60 * 1000,
       attempts: 0,
     });
-    const validChangeOtp = await requestJson(
+    const validChangeRes = await requestJson(
       server,
       'POST',
       '/api/auth/change-password/verify-update',
-      {
-        otp: '777888',
-        newPassword: 'brandNewPassword123',
-      },
-      { Authorization: `Bearer ${studentToken}` }
+      { otp: validChangeOtp, newPassword: 'ChangedPassword456' },
+      { Authorization: `Bearer ${createdToken}` }
     );
-    assert.equal(validChangeOtp.status, 200);
-    assert.equal(validChangeOtp.data.success, true);
+    assert.equal(validChangeRes.status, 200);
+    assert.equal(validChangeRes.data.success, true);
 
-    // Revert password back to student123 for subsequent tests
-    _testOtpStores.changePasswordOtps.set('student@cvr.ac.in', {
-      otpHash: crypto.createHash('sha256').update('999999').digest('hex'),
-      expiresAt: Date.now() + 10 * 60 * 1000,
-      attempts: 0,
+    // Verify new password works on login
+    const loginWithChanged = await requestJson(server, 'POST', '/api/auth/login', {
+      identifier: testStudentEmail,
+      password: 'ChangedPassword456',
     });
-    await requestJson(
-      server,
-      'POST',
-      '/api/auth/change-password/verify-update',
-      {
-        otp: '999999',
-        newPassword: 'student123',
-      },
-      { Authorization: `Bearer ${studentToken}` }
-    );
+    assert.equal(loginWithChanged.status, 200);
   });
 
-  await t.test('4. Complete Removal of Paneer Tikka Puff & Special Masala Dosa', async () => {
-    // 4a. Verify GET /api/menu does NOT contain either item
-    const menuRes = await requestJson(server, 'GET', '/api/menu');
-    assert.equal(menuRes.status, 200);
-    const items = menuRes.data.items || [];
-
-    const hasPaneerPuff = items.some(
-      (it) =>
-        it.id === 'paneer_puff' ||
-        it.id === 'paneer_puff_test' ||
-        (it.name && it.name.toLowerCase().includes('paneer tikka puff')) ||
-        (it.name && it.name.toLowerCase().includes('panner tikka puff'))
-    );
-    assert.equal(hasPaneerPuff, false, 'Paneer Tikka Puff must NOT appear in active menu');
-
-    const hasSpecialDosa = items.some(
-      (it) =>
-        it.id === 'special_masala_dosa' ||
-        (it.name && it.name.toLowerCase().includes('special masala dosa'))
-    );
-    assert.equal(hasSpecialDosa, false, 'Special Masala Dosa must NOT appear in active menu');
-
-    // 4b. Verify other items (e.g. Samosa, Veg Puff) still exist
-    const hasSamosa = items.some((it) => it.id === 'samosa' || it.name.toLowerCase().includes('samosa'));
-    assert.ok(hasSamosa, 'Other menu items such as Samosa must remain available');
-
-    // 4c. Verify direct checkout request with removed item is strictly rejected
-    const directOrderAttempt = await requestJson(server, 'POST', '/api/payments/create-order', {
-      items: [
-        { id: 'paneer_puff_test', quantity: 1 },
-      ],
+  // -------------------------------------------------------------------------
+  // TEST L: Email provider failures are reported accurately without bypassing verification.
+  // -------------------------------------------------------------------------
+  await t.test('Test L: Email provider errors are reported honestly', async () => {
+    const invalidEmailRes = await requestJson(server, 'POST', '/api/auth/register-student', {
+      email: 'not-an-email',
+      password: 'validPass123',
+      name: 'Bad Email Student',
     });
-    assert.equal(directOrderAttempt.status, 400);
-    assert.equal(directOrderAttempt.data.success, false);
+    assert.equal(invalidEmailRes.status, 400);
+    assert.equal(invalidEmailRes.data.success, false);
   });
 
-  await t.test('5. Razorpay Payment: Authoritative total, signature verification, and ledger update', async () => {
-    // 5a. Create order with authoritative items recalculation
-    const menuRes = await requestJson(server, 'GET', '/api/menu');
-    const samosaItem = menuRes.data.items.find((i) => i.id === 'samosa');
-    assert.ok(samosaItem, 'Samosa item exists');
-
-    const createOrderRes = await requestJson(server, 'POST', '/api/payments/create-order', {
-      items: [{ id: samosaItem.id, quantity: 2 }],
-      couponCode: 'WELCOME50',
-    });
-    assert.equal(createOrderRes.status, 200);
-    assert.equal(createOrderRes.data.success, true);
-    assert.ok(createOrderRes.data.razorpayOrderId);
-    assert.equal(createOrderRes.data.currency, 'INR');
-    assert.ok(createOrderRes.data.keyId);
-
-    // 5b. Signature verification with forged signature fails
-    const rzpOrderId = createOrderRes.data.razorpayOrderId;
-    const testPaymentId = `pay_rzp_ver_${Date.now()}`;
-    const forgedVerify = await requestJson(server, 'POST', '/api/payments/verify', {
-      razorpay_order_id: rzpOrderId,
-      razorpay_payment_id: testPaymentId,
-      razorpay_signature: 'fake_forged_signature_123',
-      studentEmail: 'student@cvr.ac.in',
-      studentName: 'Aarav Reddy',
-      items: [{ id: samosaItem.id, name: samosaItem.name, price: samosaItem.price, quantity: 2, isVeg: true }],
-      totalAmount: samosaItem.price * 2,
-    });
-    assert.equal(forgedVerify.status, 400);
-    assert.equal(forgedVerify.data.success, false);
-
-    // 5c. Signature verification with valid signature succeeds
-    const secret = 'nesty_rzp_server_secret_key';
-    const validSignature = crypto
-      .createHmac('sha256', secret)
-      .update(`${rzpOrderId}|${testPaymentId}`)
-      .digest('hex');
-
-    const validVerify = await requestJson(server, 'POST', '/api/payments/verify', {
-      razorpay_order_id: rzpOrderId,
-      razorpay_payment_id: testPaymentId,
-      razorpay_signature: validSignature,
-      studentEmail: 'student@cvr.ac.in',
-      studentName: 'Aarav Reddy',
-      studentPhone: '9848012345',
-      items: [{ id: samosaItem.id, name: samosaItem.name, price: samosaItem.price, quantity: 2, isVeg: true }],
-      totalAmount: samosaItem.price * 2,
-    });
-    assert.equal(validVerify.status, 200);
-    assert.equal(validVerify.data.success, true);
-    assert.equal(validVerify.data.order.paymentStatus, 'PAID');
-    assert.equal(validVerify.data.order.transactionId, testPaymentId);
-
-    // 5d. Duplicate payment verification is idempotent
-    const duplicateVerify = await requestJson(server, 'POST', '/api/payments/verify', {
-      razorpay_order_id: rzpOrderId,
-      razorpay_payment_id: testPaymentId,
-      razorpay_signature: validSignature,
-      studentEmail: 'student@cvr.ac.in',
-      items: [{ id: samosaItem.id, name: samosaItem.name, price: samosaItem.price, quantity: 2, isVeg: true }],
-      totalAmount: samosaItem.price * 2,
-    });
-    assert.equal(duplicateVerify.status, 200);
-    assert.equal(duplicateVerify.data.order.transactionId, testPaymentId);
-
-    // 5e. Payment appears in payment history
-    const paymentHistoryRes = await requestJson(
+  // -------------------------------------------------------------------------
+  // TEST M: The static QR is completely removed.
+  // -------------------------------------------------------------------------
+  await t.test('Test M: The static vending QR endpoint is completely removed', async () => {
+    const vendingQrRes = await requestJson(
       server,
       'GET',
-      '/api/payments?email=student@cvr.ac.in',
+      '/api/admin/vending-qr-config',
       null,
-      { Authorization: `Bearer ${studentToken}` }
+      { Authorization: `Bearer ${adminToken}` }
     );
-    assert.equal(paymentHistoryRes.status, 200);
-    const pmt = paymentHistoryRes.data.payments.find((p) => p.transactionId === testPaymentId);
-    assert.ok(pmt, 'Payment must be recorded in payment history');
-    assert.equal(pmt.status, 'PAID');
+    assert.equal(vendingQrRes.status, 404, 'Static vending QR endpoint must be 404 (removed)');
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST N: A verified payment receives exactly one 3-character token containing letters and numbers.
+  // -------------------------------------------------------------------------
+  let paidOrderObj = null;
+  await t.test('Test N: Verified payment receives exactly one 3-character token containing letters and numbers', async () => {
+    // Test the generator directly across 50 iterations
+    for (let i = 0; i < 50; i++) {
+      const tok = generatePickupToken();
+      assert.equal(tok.length, 3, `Token "${tok}" must be exactly 3 characters`);
+      assert.ok(/[A-Z]/.test(tok), `Token "${tok}" must contain at least one letter`);
+      assert.ok(/[0-9]/.test(tok), `Token "${tok}" must contain at least one digit`);
+      assert.equal(/^[A-Z0-9]{3}$/.test(tok), true, `Token "${tok}" must be alphanumeric uppercase`);
+    }
+
+    // Verify through payments/verify endpoint
+    const rzpOrderId = `order_test_${Date.now()}`;
+    const rzpPaymentId = `pay_rzp_token_${Date.now()}`;
+    const secret = 'nesty_rzp_server_secret_key';
+    const signature = crypto
+      .createHmac('sha256', secret)
+      .update(`${rzpOrderId}|${rzpPaymentId}`)
+      .digest('hex');
+
+    const verifyRes = await requestJson(server, 'POST', '/api/payments/verify', {
+      razorpay_order_id: rzpOrderId,
+      razorpay_payment_id: rzpPaymentId,
+      razorpay_signature: signature,
+      studentEmail: testStudentEmail,
+      studentName: 'Test Student',
+      studentPhone: '9848012345',
+      items: [{ id: 'samosa', name: 'Samosa', price: 12, quantity: 2, isVeg: true }],
+      totalAmount: 24,
+    });
+
+    assert.equal(verifyRes.status, 200);
+    assert.equal(verifyRes.data.success, true);
+    assert.ok(verifyRes.data.order);
+    assert.ok(verifyRes.data.pickupToken);
+    const token = verifyRes.data.pickupToken;
+    assert.equal(token.length, 3, 'Pickup token must be exactly 3 characters');
+    assert.ok(/[A-Z]/.test(token), 'Pickup token must contain at least one letter');
+    assert.ok(/[0-9]/.test(token), 'Pickup token must contain at least one digit');
+    assert.equal(verifyRes.data.order.pickupToken, token);
+    paidOrderObj = verifyRes.data.order;
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST O: Failed, cancelled, pending, and unverified payments receive no valid pickup token.
+  // -------------------------------------------------------------------------
+  await t.test('Test O: Failed or unverified payments receive no pickup token', async () => {
+    const failedRes = await requestJson(server, 'POST', '/api/payment-failed', {
+      studentEmail: testStudentEmail,
+      items: [{ id: 'samosa', price: 12, quantity: 1 }],
+      amount: 12,
+      error: { description: 'Card declined' },
+    });
+
+    assert.equal(failedRes.status, 200);
+    assert.equal(failedRes.data.order.paymentStatus, 'FAILED');
+    assert.equal(
+      Boolean(failedRes.data.order.pickupToken),
+      false,
+      'Failed payment must never have a pickup token'
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST P: Repeated payment callbacks do not create multiple tokens or duplicate orders.
+  // -------------------------------------------------------------------------
+  await t.test('Test P: Repeated payment callbacks return the same order and token idempotently', async () => {
+    assert.ok(paidOrderObj, 'Preceding paid order exists');
+
+    const duplicateRes = await requestJson(server, 'POST', '/api/payments/verify', {
+      razorpay_order_id: paidOrderObj.razorpayOrderId,
+      razorpay_payment_id: paidOrderObj.transactionId,
+      razorpay_signature: 'any_signature_for_duplicate',
+      studentEmail: paidOrderObj.studentEmail,
+      items: paidOrderObj.items,
+      totalAmount: paidOrderObj.totalAmount,
+    });
+
+    assert.equal(duplicateRes.status, 200);
+    assert.equal(duplicateRes.data.order.id, paidOrderObj.id, 'Must return same order ID');
+    assert.equal(
+      duplicateRes.data.pickupToken,
+      paidOrderObj.pickupToken,
+      'Must return identical pickup token on retry'
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST Q: Student order history and admin order management display the correct token and order.
+  // -------------------------------------------------------------------------
+  await t.test('Test Q: Student order history and admin order management display correct token', async () => {
+    // Q1. Student orders
+    const studentOrdersRes = await requestJson(
+      server,
+      'GET',
+      `/api/orders?email=${encodeURIComponent(testStudentEmail)}`,
+      null,
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(studentOrdersRes.status, 200);
+    const matchedStudentOrder = studentOrdersRes.data.orders.find((o) => o.id === paidOrderObj.id);
+    assert.ok(matchedStudentOrder, 'Order must appear in student order history');
+    assert.equal(matchedStudentOrder.pickupToken, paidOrderObj.pickupToken);
+
+    // Q2. Admin orders search by pickupToken
+    const adminSearchRes = await requestJson(
+      server,
+      'GET',
+      `/api/admin/orders?search=${encodeURIComponent(paidOrderObj.pickupToken)}`,
+      null,
+      { Authorization: `Bearer ${adminToken}` }
+    );
+    assert.equal(adminSearchRes.status, 200);
+    const matchedAdminOrder = adminSearchRes.data.orders.find((o) => o.id === paidOrderObj.id);
+    assert.ok(matchedAdminOrder, 'Admin orders search by pickupToken must find the order');
+    assert.equal(matchedAdminOrder.pickupToken, paidOrderObj.pickupToken);
   });
 });

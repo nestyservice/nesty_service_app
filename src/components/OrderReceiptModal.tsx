@@ -115,6 +115,27 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
           </p>
         </div>
 
+        {/* Prominent Pickup Token Section (Requirement #8) */}
+        {order.pickupToken && (
+          <div
+            data-testid="receipt_pickup_token_section"
+            className="mt-4 rounded-2xl p-4 bg-nesty-burgundy text-nesty-cream border-2 border-nesty-gold text-center shadow-lg"
+          >
+            <div className="text-[11px] font-extrabold tracking-widest uppercase text-nesty-gold">
+              YOUR PICKUP TOKEN
+            </div>
+            <div
+              data-testid="receipt_pickup_token_display"
+              className="text-4xl sm:text-5xl font-black font-mono tracking-widest text-nesty-gold my-2"
+            >
+              {order.pickupToken}
+            </div>
+            <p className="text-xs text-nesty-cream/90 max-w-xs mx-auto font-medium">
+              Show this 3-character token at the Canteen Counter to collect your food.
+            </p>
+          </div>
+        )}
+
         {/* Student & Payment Info */}
         <div className="mt-4 bg-nesty-creamElevated border border-nesty-creamBorder rounded-2xl p-3.5 space-y-1.5 text-xs">
           <div className="flex justify-between">

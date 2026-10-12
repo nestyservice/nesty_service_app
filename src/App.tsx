@@ -24,7 +24,6 @@ import {
 } from './components/StudentViews';
 import { AdminDashboardView } from './components/AdminDashboardView';
 import { CartCheckoutDrawer } from './components/CartCheckoutDrawer';
-import { NestyQrScannerModal } from './components/NestyQrScannerModal';
 import { OrderReceiptModal } from './components/OrderReceiptModal';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 
@@ -78,10 +77,6 @@ export const App: React.FC = () => {
   const [paymentErrorAlert, setPaymentErrorAlert] = useState<string | null>(null);
 
   const [selectedReceiptOrder, setSelectedReceiptOrder] = useState<OrderRecord | null>(null);
-
-  const [isScannerOpen, setIsScannerOpen] = useState<boolean>(false);
-  const [isValidatingQr, setIsValidatingQr] = useState<boolean>(false);
-  const [qrScanResult, setQrScanResult] = useState<QrValidationResult | null>(null);
 
   const [toast, setToast] = useState<{ text: string; isError?: boolean } | null>(null);
 
@@ -379,32 +374,7 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleQrScanSubmit = async (rawValue: string) => {
-    setIsValidatingQr(true);
-    try {
-      const res = await fetch('/api/orders/validate-qr', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ rawValue }),
-      });
-      const result = (await res.json()) as QrValidationResult;
-      setQrScanResult(result);
 
-      if (result.valid && result.type === 'PROMO_COUPON' && result.couponCode) {
-        const cpn = coupons.find((c) => c.code.toUpperCase() === result.couponCode?.toUpperCase());
-        if (cpn) setAppliedCoupon(cpn);
-      }
-    } catch {
-      setQrScanResult({
-        valid: false,
-        type: 'INVALID',
-        title: 'Validation Error',
-        subtitle: 'Could not connect to QR validation service.',
-      });
-    } finally {
-      setIsValidatingQr(false);
-    }
-  };
 
   const handleAdminSaveProduct = async (product: {
     existingId?: string;
@@ -606,10 +576,6 @@ export const App: React.FC = () => {
           <NestyTopHeader
             user={currentUser}
             cartCount={totalCartItems}
-            onOpenScanner={() => {
-              setQrScanResult(null);
-              setIsScannerOpen(true);
-            }}
             onOpenCart={() => setIsCartOpen(true)}
             onSignOut={handleSignOut}
           />
@@ -700,16 +666,6 @@ export const App: React.FC = () => {
             onPaySuccess={handleVerifiedPaymentSuccess}
             onPayFailed={handlePaymentFailed}
             onClose={() => setIsCartOpen(false)}
-          />
-
-          <NestyQrScannerModal
-            isOpen={isScannerOpen}
-            isLoadingValidation={isValidatingQr}
-            scanResult={qrScanResult}
-            onScanSubmitted={handleQrScanSubmit}
-            onClearResult={() => setQrScanResult(null)}
-            onOpenOrderDetails={(ord) => setSelectedReceiptOrder(ord)}
-            onClose={() => setIsScannerOpen(false)}
           />
 
           <OrderReceiptModal

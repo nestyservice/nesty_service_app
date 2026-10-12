@@ -37,6 +37,7 @@ export interface OrderRecord {
   razorpayOrderId?: string | null;
   paymentStatus: 'PAID' | 'SUCCESS' | 'FAILED' | 'PENDING';
   orderStatus: 'PENDING_PICKUP' | 'PREPARING' | 'READY' | 'CLAIMED' | 'CANCELLED';
+  pickupToken?: string;
   failureReason?: string;
   claimedBy?: string | null;
   claimedAt?: string | null;
@@ -84,6 +85,19 @@ export interface AnnouncementRecord {
   title: string;
   message: string;
   createdAt: string;
+}
+
+export interface DailyTokenRecord {
+  id: string;
+  studentEmail: string;
+  studentName: string;
+  rollNo: string;
+  code: string; // Exactly 3 chars: 1 alphabet + 2 numbers (e.g. 'A42')
+  date: string; // 'YYYY-MM-DD'
+  status: 'ACTIVE' | 'EXPIRED';
+  createdAt: string;
+  expiredAt?: string | null;
+  expiredBy?: string | null;
 }
 
 export interface QrValidationResult {

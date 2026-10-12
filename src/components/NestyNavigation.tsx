@@ -16,7 +16,6 @@ export type StudentDestination = 'MENU' | 'ORDER_HISTORY' | 'PAYMENT_HISTORY' | 
 interface NestyTopHeaderProps {
   user: UserAccount;
   cartCount: number;
-  onOpenScanner: () => void;
   onOpenCart: () => void;
   onSignOut: () => void;
 }
@@ -24,7 +23,6 @@ interface NestyTopHeaderProps {
 export const NestyTopHeader: React.FC<NestyTopHeaderProps> = ({
   user,
   cartCount,
-  onOpenScanner,
   onOpenCart,
   onSignOut,
 }) => {
@@ -66,18 +64,6 @@ export const NestyTopHeader: React.FC<NestyTopHeaderProps> = ({
         <div className="flex items-center gap-2 sm:gap-2.5">
           {!isAdmin && (
             <>
-              {/* QR Scanner only for promo coupons / order verification on student side */}
-              <button
-                type="button"
-                onClick={onOpenScanner}
-                data-testid="header_qr_scanner_button"
-                aria-label="Open Coupon / Order Scanner"
-                title="Scan Promo Coupon or Order QR"
-                className="w-10 h-10 rounded-xl bg-nesty-creamElevated text-nesty-burgundy border-[1.5px] border-nesty-gold flex items-center justify-center hover:bg-nesty-goldLight transition shadow-sm"
-              >
-                <QrCode className="w-5 h-5" />
-              </button>
-
               <button
                 type="button"
                 onClick={onOpenCart}

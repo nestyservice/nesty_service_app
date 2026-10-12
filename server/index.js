@@ -42,8 +42,21 @@ function hashPassword(password) {
 
 function verifyPassword(plainPassword, storedHash) {
   if (!plainPassword || !storedHash) return false;
-  if (storedHash === plainPassword) return true; // Compatible with Android seed format
-  return storedHash === hashPassword(plainPassword);
+  const raw = plainPassword.toString();
+  const trimmed = raw.trim();
+
+  // 1. Direct plain match (legacy seeds)
+  if (storedHash === raw || storedHash === trimmed) return true;
+
+  // 2. Salted sha256 (standard NESTY hash)
+  if (storedHash === hashPassword(raw) || storedHash === hashPassword(trimmed)) return true;
+
+  // 3. Unsalted sha256 (fallback for external or earlier registrations)
+  const unsalted = crypto.createHash('sha256').update(raw).digest('hex');
+  const unsaltedTrimmed = crypto.createHash('sha256').update(trimmed).digest('hex');
+  if (storedHash === unsalted || storedHash === unsaltedTrimmed) return true;
+
+  return false;
 }
 
 // Signed Server Session Token (HMAC-SHA256)
@@ -85,11 +98,45 @@ const emailVerificationOtps = new Map();
 const passwordResetOtps = new Map();
 const changePasswordOtps = new Map();
 
+// Temporary Pending Registrations Store (Map<email, pendingUserData>)
+// Account is only committed to db.users after OTP verification succeeds
+const pendingRegistrations = new Map();
+
+// Requirement 8: Pickup Token Generator
+// Generates a unique 3-character alphanumeric token containing uppercase letters and digits.
+// Every token MUST contain at least one letter and at least one digit (e.g. 'A7K', 'B3M', '9Q2').
+// Excludes ambiguous characters ('I', 'O', '0', '1').
+export function generatePickupToken(existingTokens = new Set()) {
+  const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const DIGITS = '23456789';
+  const ALL = LETTERS + DIGITS;
+
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    let token = '';
+    for (let i = 0; i < 3; i++) {
+      token += ALL[crypto.randomInt(0, ALL.length)];
+    }
+    const hasLetter = /[A-Z]/.test(token);
+    const hasDigit = /[0-9]/.test(token);
+    if (token.length === 3 && hasLetter && hasDigit && !existingTokens.has(token)) {
+      return token;
+    }
+  }
+
+  // Fallback deterministic structure: 1 Letter, 1 Digit, 1 random from ALL
+  const l = LETTERS[crypto.randomInt(0, LETTERS.length)];
+  const d = DIGITS[crypto.randomInt(0, DIGITS.length)];
+  const a = ALL[crypto.randomInt(0, ALL.length)];
+  const chars = [l, d, a].sort(() => Math.random() - 0.5);
+  return chars.join('');
+}
+
 // Test helper export for automated verification runner
 export const _testOtpStores = {
   emailVerificationOtps,
   passwordResetOtps,
   changePasswordOtps,
+  pendingRegistrations,
 };
 
 const INITIAL_SEED_DATA = {
@@ -280,6 +327,7 @@ const INITIAL_SEED_DATA = {
       createdAt: '2026-10-08T13:05:00Z',
     },
   ],
+  dailyTokens: [],
 };
 
 function loadDb() {
@@ -294,6 +342,7 @@ function loadDb() {
         announcements: parsed.announcements || INITIAL_SEED_DATA.announcements,
         orders: parsed.orders || INITIAL_SEED_DATA.orders,
         payments: parsed.payments || INITIAL_SEED_DATA.payments,
+        dailyTokens: parsed.dailyTokens || [],
       };
     }
   } catch (err) {
@@ -390,15 +439,16 @@ app.post('/api/auth/login', async (req, res) => {
     });
   }
 
-  // Look up user by email OR roll number
+  // Look up user by email OR roll number (case-insensitive and trimmed)
   let user = db.users.find(
     (u) =>
       u.email.toLowerCase() === identifierLower ||
+      (u.rollNo && u.rollNo.toUpperCase() === rawIdentifier.toUpperCase()) ||
       (u.rollNo && u.rollNo.toLowerCase() === identifierLower)
   );
 
   // Auto-seed admin user if configured in env
-  if (!user && ADMIN_EMAILS.includes(identifierLower) && password === ADMIN_DEFAULT_PASSWORD) {
+  if (!user && ADMIN_EMAILS.includes(identifierLower) && password.trim() === ADMIN_DEFAULT_PASSWORD) {
     user = {
       email: identifierLower,
       id: 'usr_admin_cvr',
@@ -407,7 +457,7 @@ app.post('/api/auth/login', async (req, res) => {
       rollNo: 'ADMIN-01',
       role: 'admin',
       emailVerified: true,
-      passwordHash: hashPassword(password),
+      passwordHash: hashPassword(password.trim()),
       createdAt: new Date().toISOString(),
     };
     db.users.push(user);
@@ -415,6 +465,21 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   if (!user) {
+    // Check if user is pending email verification
+    const isPending =
+      pendingRegistrations.has(identifierLower) ||
+      Array.from(pendingRegistrations.values()).some(
+        (p) => p.rollNo.toUpperCase() === rawIdentifier.toUpperCase()
+      );
+    if (isPending) {
+      return res.status(403).json({
+        success: false,
+        requiresVerification: true,
+        email: identifierLower,
+        message: 'Account registration is pending email verification. Please verify your OTP to complete registration.',
+      });
+    }
+
     return res.status(401).json({
       success: false,
       message: 'Invalid credentials. Please verify your email or roll number and password.',
@@ -489,38 +554,28 @@ app.post('/api/auth/register-student', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Full name is required.' });
   }
 
+  // Check if active verified account already exists
   const existing = db.users.find(
     (u) => u.email.toLowerCase() === email || (rollNo && u.rollNo && u.rollNo.toUpperCase() === rollNo)
   );
-  if (existing) {
-    return res.status(409).json({ success: false, message: 'An account with this email or roll number already exists.' });
+  if (existing && existing.emailVerified) {
+    return res.status(409).json({ success: false, message: 'An account with this email or roll number already exists. Please log in directly.' });
   }
 
-  // Student registered without requiring or storing any pickup block or coins
-  // Created as unverified initially
-  const newUser = {
-    email,
-    id: `usr_${crypto.randomBytes(4).toString('hex')}`,
-    name,
-    phone,
-    rollNo,
-    role: 'student',
-    emailVerified: false,
-    passwordHash: hashPassword(password),
-    createdAt: new Date().toISOString(),
-  };
+  // Check cooldown on verification requests
+  const existingOtp = emailVerificationOtps.get(email);
+  if (existingOtp && existingOtp.cooldownUntil && Date.now() < existingOtp.cooldownUntil) {
+    const remainingSeconds = Math.ceil((existingOtp.cooldownUntil - Date.now()) / 1000);
+    return res.status(429).json({
+      success: false,
+      message: `Please wait ${remainingSeconds} seconds before requesting a new verification code.`,
+    });
+  }
 
   const otpCode = crypto.randomInt(100000, 1000000).toString();
   const otpHash = crypto.createHash('sha256').update(otpCode).digest('hex');
 
-  emailVerificationOtps.set(email, {
-    otpHash,
-    expiresAt: Date.now() + 10 * 60 * 1000,
-    attempts: 0,
-    cooldownUntil: Date.now() + 60 * 1000,
-  });
-
-  // Attempt email delivery
+  // Attempt real email delivery BEFORE storing or creating account
   try {
     const { subject, text, html } = buildVerificationOtpEmail(otpCode, 'Account Registration Verification');
     await sendCampusEmail({ to: email, name, subject, text, html });
@@ -532,13 +587,28 @@ app.post('/api/auth/register-student', async (req, res) => {
     });
   }
 
-  db.users.push(newUser);
-  saveDb(db);
+  // Only store temporary pending registration and OTP record AFTER successful email dispatch
+  // Do NOT add to db.users yet! (Requirement #1)
+  pendingRegistrations.set(email, {
+    email,
+    name,
+    phone,
+    rollNo,
+    passwordHash: hashPassword(password.trim()),
+    createdAt: new Date().toISOString(),
+  });
+
+  emailVerificationOtps.set(email, {
+    otpHash,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+    attempts: 0,
+    cooldownUntil: Date.now() + 60 * 1000,
+  });
 
   return res.status(201).json({
     success: true,
     requiresVerification: true,
-    email: newUser.email,
+    email,
     message: 'Verification OTP sent to your registered college email. Please verify your account to proceed.',
   });
 });
@@ -548,11 +618,13 @@ app.post('/api/auth/verify-email/send-otp', async (req, res) => {
   const db = loadDb();
   const email = (req.body?.email || '').toString().trim().toLowerCase();
 
+  const pending = pendingRegistrations.get(email);
   const user = db.users.find((u) => u.email.toLowerCase() === email);
-  if (!user) {
-    return res.status(404).json({ success: false, message: 'Account not found.' });
+
+  if (!pending && !user) {
+    return res.status(404).json({ success: false, message: 'No registration pending for this email. Please register first.' });
   }
-  if (user.emailVerified) {
+  if (user && user.emailVerified) {
     return res.json({ success: true, message: 'Account is already verified. You can log in directly.' });
   }
 
@@ -568,16 +640,10 @@ app.post('/api/auth/verify-email/send-otp', async (req, res) => {
   const otpCode = crypto.randomInt(100000, 1000000).toString();
   const otpHash = crypto.createHash('sha256').update(otpCode).digest('hex');
 
-  emailVerificationOtps.set(email, {
-    otpHash,
-    expiresAt: Date.now() + 10 * 60 * 1000,
-    attempts: 0,
-    cooldownUntil: Date.now() + 60 * 1000,
-  });
-
+  const recipientName = pending ? pending.name : user.name;
   try {
     const { subject, text, html } = buildVerificationOtpEmail(otpCode, 'Email Verification');
-    await sendCampusEmail({ to: email, name: user.name, subject, text, html });
+    await sendCampusEmail({ to: email, name: recipientName, subject, text, html });
   } catch (err) {
     console.error('[AUTH] Resend verification email failed:', err.message);
     return res.status(502).json({
@@ -585,6 +651,13 @@ app.post('/api/auth/verify-email/send-otp', async (req, res) => {
       message: `Failed to deliver verification code to your college email: ${err.message}`,
     });
   }
+
+  emailVerificationOtps.set(email, {
+    otpHash,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+    attempts: 0,
+    cooldownUntil: Date.now() + 60 * 1000,
+  });
 
   return res.json({
     success: true,
@@ -623,15 +696,41 @@ app.post('/api/auth/verify-email/confirm', (req, res) => {
     return res.status(400).json({ success: false, message: 'Invalid OTP' });
   }
 
-  // OTP verified successfully
+  // OTP verified successfully!
   emailVerificationOtps.delete(email);
 
-  const user = db.users.find((u) => u.email.toLowerCase() === email);
-  if (!user) {
+  const pending = pendingRegistrations.get(email);
+  let user = db.users.find((u) => u.email.toLowerCase() === email);
+
+  if (pending) {
+    pendingRegistrations.delete(email);
+    if (!user) {
+      user = {
+        email: pending.email,
+        id: `usr_${crypto.randomBytes(4).toString('hex')}`,
+        name: pending.name,
+        phone: pending.phone,
+        rollNo: pending.rollNo,
+        role: 'student',
+        emailVerified: true,
+        passwordHash: pending.passwordHash,
+        createdAt: new Date().toISOString(),
+      };
+      db.users.push(user);
+    } else {
+      user.emailVerified = true;
+      user.passwordHash = pending.passwordHash;
+      user.name = pending.name;
+      user.phone = pending.phone;
+      user.rollNo = pending.rollNo;
+    }
+  } else if (user) {
+    user.emailVerified = true;
+  } else {
     return res.status(404).json({ success: false, message: 'User account not found.' });
   }
 
-  user.emailVerified = true;
+  // Persist the verified account to disk database immediately (Requirements #1 & #3)
   saveDb(db);
 
   const token = createAuthToken(user);
@@ -1199,12 +1298,13 @@ app.post('/api/payments/verify', (req, res) => {
     }
   }
 
-  // Check for duplicate payment callback
+  // Check for duplicate payment callback (Requirement #8 & #9)
   const duplicate = db.orders.find((o) => o.transactionId === razorpay_payment_id);
   if (duplicate) {
     return res.json({
       success: true,
       order: duplicate,
+      pickupToken: duplicate.pickupToken,
       message: `Order #${duplicate.id} was already confirmed.`,
     });
   }
@@ -1244,6 +1344,20 @@ app.post('/api/payments/verify', (req, res) => {
   const finalAmount = Math.max(1, authoritativeSubtotal - disc);
   const orderId = `NST-${1000 + Math.floor(Math.random() * 9000)}`;
 
+  // Generate unique 3-character pickup token containing letters and numbers (Requirement #8)
+  const activeTokens = new Set(
+    db.orders
+      .filter(
+        (o) =>
+          (o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS') &&
+          o.orderStatus !== 'CLAIMED' &&
+          o.orderStatus !== 'CANCELLED' &&
+          o.pickupToken
+      )
+      .map((o) => o.pickupToken)
+  );
+  const pickupToken = generatePickupToken(activeTokens);
+
   const newOrder = {
     id: orderId,
     studentEmail: email,
@@ -1258,6 +1372,7 @@ app.post('/api/payments/verify', (req, res) => {
     razorpayOrderId: razorpay_order_id || null,
     paymentStatus: 'PAID',
     orderStatus: 'PENDING_PICKUP',
+    pickupToken,
     claimedBy: null,
     claimedAt: null,
     createdAt: new Date().toISOString(),
@@ -1285,7 +1400,8 @@ app.post('/api/payments/verify', (req, res) => {
     success: true,
     order: newOrder,
     payment: newPayment,
-    message: `Payment verified! Order #${newOrder.id} confirmed. Transaction ID: ${newOrder.transactionId}`,
+    pickupToken: newOrder.pickupToken,
+    message: `Payment verified! Order #${newOrder.id} confirmed. Pickup Token: ${newOrder.pickupToken}. Transaction ID: ${newOrder.transactionId}`,
   });
 });
 
@@ -1320,6 +1436,30 @@ app.post('/api/orders', (req, res) => {
   const orderId = `NST-${1000 + Math.floor(Math.random() * 9000)}`;
   const cleanTxn = (transactionId || '').toString().trim() || `TXN-RZP-${Date.now()}`;
 
+  // Check for duplicate callback
+  const duplicate = db.orders.find((o) => o.transactionId === cleanTxn);
+  if (duplicate) {
+    return res.json({
+      success: true,
+      order: duplicate,
+      pickupToken: duplicate.pickupToken,
+      message: `Order #${duplicate.id} was already confirmed.`,
+    });
+  }
+
+  const activeTokens = new Set(
+    db.orders
+      .filter(
+        (o) =>
+          (o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS') &&
+          o.orderStatus !== 'CLAIMED' &&
+          o.orderStatus !== 'CANCELLED' &&
+          o.pickupToken
+      )
+      .map((o) => o.pickupToken)
+  );
+  const pickupToken = generatePickupToken(activeTokens);
+
   const newOrder = {
     id: orderId,
     studentEmail: email,
@@ -1334,6 +1474,7 @@ app.post('/api/orders', (req, res) => {
     razorpayOrderId: razorpayOrderId || null,
     paymentStatus: 'PAID',
     orderStatus: 'PENDING_PICKUP',
+    pickupToken,
     claimedBy: null,
     claimedAt: null,
     createdAt: new Date().toISOString(),
@@ -1361,7 +1502,8 @@ app.post('/api/orders', (req, res) => {
     success: true,
     order: newOrder,
     payment: newPayment,
-    message: `Order #${newOrder.id} confirmed! Transaction ID: ${newOrder.transactionId}`,
+    pickupToken: newOrder.pickupToken,
+    message: `Order #${newOrder.id} confirmed! Pickup Token: ${newOrder.pickupToken}. Transaction ID: ${newOrder.transactionId}`,
   });
 });
 
@@ -1372,6 +1514,7 @@ app.post('/api/payment-failed', (req, res) => {
   const orderId = `NST-${1000 + Math.floor(Math.random() * 9000)}`;
   const txnId = transactionId || `FAIL-${Date.now() % 100000}`;
 
+  // REQUIREMENT #8: Never assign a valid pickup token to failed, cancelled, or pending payments
   const failedOrder = {
     id: orderId,
     studentEmail: email,
@@ -1429,7 +1572,7 @@ app.get('/api/payments', (req, res) => {
 });
 
 // ============================================================================
-// 6. STUDENT & ADMIN ORDERS (Requirement #11)
+// 6. STUDENT & ADMIN ORDERS (Requirement #8 & #11)
 // Admin can view all orders from all students with search & status filters
 // ============================================================================
 app.get('/api/orders', (req, res) => {
@@ -1446,7 +1589,7 @@ app.get('/api/orders', (req, res) => {
   return res.json({ success: true, orders });
 });
 
-// Admin All Orders with Search & Pagination (Requirement #11)
+// Admin All Orders with Search & Pagination (Requirement #8 & #11)
 app.get('/api/admin/orders', (req, res) => {
   const db = loadDb();
   const admin = requireAdmin(req, res, db);
@@ -1462,6 +1605,7 @@ app.get('/api/admin/orders', (req, res) => {
     filtered = filtered.filter(
       (o) =>
         o.id.toLowerCase().includes(search) ||
+        (o.pickupToken && o.pickupToken.toLowerCase().includes(search)) ||
         o.studentEmail.toLowerCase().includes(search) ||
         o.studentName.toLowerCase().includes(search) ||
         o.transactionId.toLowerCase().includes(search)
@@ -1505,23 +1649,6 @@ app.patch('/api/admin/orders/:id/status', (req, res) => {
     success: true,
     order,
     message: `Order #${order.id} marked as ${newStatus}`,
-  });
-});
-
-// ============================================================================
-// 7. STATIC VENDING MACHINE QR DESTINATION CONFIG (Requirement #10)
-// Configures static QR code from stable APP_URL, no admin tokens inside QR
-// ============================================================================
-app.get('/api/admin/vending-qr-config', (req, res) => {
-  const db = loadDb();
-  const admin = requireAdmin(req, res, db);
-  if (!admin) return;
-
-  return res.json({
-    success: true,
-    appUrl: APP_URL,
-    defaultMachineId: 'VM-NESTY-01',
-    destinationUrl: `${APP_URL}/?source=vending_machine&machineId=VM-NESTY-01`,
   });
 });
 
