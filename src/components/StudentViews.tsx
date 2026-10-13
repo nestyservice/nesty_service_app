@@ -206,8 +206,11 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredItems.map((item) => {
+          {filteredItems.map((item, idx) => {
             const qty = cartQuantities[item.id] || 0;
+            const isAboveFold = idx < 3;
+            const webpUrl = resolveFoodImageUrl(item.image);
+            const jpgFallback = item.fallbackImage || webpUrl.replace(/\.webp$/, '.jpg');
             return (
               <div
                 key={item.id}
@@ -219,17 +222,23 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
                 }`}
               >
                 <div>
-                  <div className="relative h-44 w-full bg-nesty-creamElevated overflow-hidden">
-                    <img
-                      src={resolveFoodImageUrl(item.image)}
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = '/images/samosa.jpg';
-                      }}
-                      alt={item.name}
-                      loading="eager"
-                      decoding="async"
-                      className="w-full h-full object-cover"
-                    />
+                  <div className="relative aspect-[4/3] w-full bg-nesty-creamElevated overflow-hidden">
+                    <picture>
+                      <source srcSet={webpUrl} type="image/webp" />
+                      <img
+                        src={jpgFallback}
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).src = '/images/samosa.webp';
+                        }}
+                        alt={item.name}
+                        width={640}
+                        height={480}
+                        loading={isAboveFold ? 'eager' : 'lazy'}
+                        fetchPriority={isAboveFold ? 'high' : 'low'}
+                        decoding="async"
+                        className="w-full h-full object-cover transition-opacity duration-300"
+                      />
+                    </picture>
                     <div className="absolute top-3 left-3 px-2.5 py-1 rounded-lg bg-nesty-creamSurface/95 border border-nesty-gold flex items-center gap-1.5 shadow-sm">
                       <span
                         className={`w-2.5 h-2.5 rounded-full ${

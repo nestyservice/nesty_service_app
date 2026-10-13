@@ -336,9 +336,11 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                     <img
                       src={resolveFoodImageUrl(item.image)}
                       onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = '/images/samosa.jpg';
+                        (e.currentTarget as HTMLImageElement).src = '/images/samosa.webp';
                       }}
                       alt={item.name}
+                      width={48}
+                      height={48}
                       loading="eager"
                       className="w-12 h-12 rounded-xl object-cover border border-nesty-gold shrink-0"
                     />

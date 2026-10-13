@@ -541,7 +541,6 @@ test('NESTY Complete End-to-End System Verification Suite (Requirements 1-11)', 
   // TEST S: Menu uses local fast images without deliz-canteen URLs.
   // -------------------------------------------------------------------------
   await t.test('Test S: Menu catalog items use local instant images', async () => {
-
     const menuRes = await requestJson(server, 'GET', '/api/menu');
     assert.equal(menuRes.status, 200);
     assert.ok(menuRes.data.items.length > 0);
@@ -556,4 +555,73 @@ test('NESTY Complete End-to-End System Verification Suite (Requirements 1-11)', 
       );
     }
   });
+
+  // -------------------------------------------------------------------------
+  // TEST T: Admin Revenue Analytics endpoint security & calculation integrity.
+  // -------------------------------------------------------------------------
+  await t.test('Test T: Admin Revenue Analytics endpoint security and accurate calculations', async () => {
+    // 1. Unauthenticated request must return 403 Forbidden
+    const unauthRes = await requestJson(server, 'GET', '/api/admin/revenue/analytics');
+    assert.equal(unauthRes.status, 403, 'Unauthenticated revenue request must be rejected');
+
+    // 2. Student request must return 403 Forbidden
+    const studentRes = await requestJson(server, 'GET', '/api/admin/revenue/analytics', null, {
+      Authorization: `Bearer ${createdToken}`,
+    });
+    assert.equal(studentRes.status, 403, 'Student revenue request must be rejected');
+
+    // 3. Admin request must return 200 OK with verified analytics payload
+    const adminRevRes = await requestJson(server, 'GET', '/api/admin/revenue/analytics', null, {
+      Authorization: `Bearer ${adminToken}`,
+    });
+    assert.equal(adminRevRes.status, 200, 'Admin revenue request must return 200 OK');
+    assert.equal(adminRevRes.data.success, true);
+
+    const { summary, selectedDayReport, allTimeProductSales } = adminRevRes.data;
+    assert.ok(summary, 'Must contain summary metrics');
+    assert.ok(typeof summary.todayRevenue === 'number', 'todayRevenue must be number');
+    assert.ok(typeof summary.totalHistoricalRevenue === 'number', 'totalHistoricalRevenue must be number');
+    assert.ok(typeof summary.totalSuccessfulPayments === 'number', 'totalSuccessfulPayments must be number');
+    assert.ok(typeof summary.totalProductsSold === 'number', 'totalProductsSold must be number');
+    assert.ok(typeof summary.totalOrders === 'number', 'totalOrders must be number');
+    assert.ok(typeof summary.timeRangeLabel === 'string', 'timeRangeLabel must be string');
+    assert.ok(Array.isArray(summary.availableDates), 'availableDates must be array');
+
+    assert.ok(selectedDayReport, 'Must contain selectedDayReport');
+    assert.ok(typeof selectedDayReport.grossRevenue === 'number');
+    assert.ok(typeof selectedDayReport.netRevenue === 'number');
+    assert.ok(Array.isArray(selectedDayReport.transactions));
+    assert.ok(Array.isArray(selectedDayReport.productSalesBreakdown));
+
+    assert.ok(Array.isArray(allTimeProductSales), 'allTimeProductSales must be array');
+
+    // 4. Test date-specific query parameter
+    const testDate = summary.todayDate;
+    const dateQueryRes = await requestJson(
+      server,
+      'GET',
+      `/api/admin/revenue/analytics?date=${testDate}`,
+      null,
+      { Authorization: `Bearer ${adminToken}` }
+    );
+    assert.equal(dateQueryRes.status, 200);
+    assert.equal(dateQueryRes.data.selectedDayReport.date, testDate);
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST U: Food image assets (Egg Puff, Chicken Puff, Veg Puff, Samosa) exist in WebP.
+  // -------------------------------------------------------------------------
+  await t.test('Test U: Food image assets mapped and optimized in WebP format', async () => {
+    const publicImagesDir = path.join(process.cwd(), 'public', 'images');
+    const requiredImages = ['egg-puff.webp', 'chicken-puff.webp', 'veg-puff.webp', 'samosa.webp'];
+
+    for (const imgName of requiredImages) {
+      const fullPath = path.join(publicImagesDir, imgName);
+      assert.ok(fs.existsSync(fullPath), `Optimized image ${imgName} must exist at ${fullPath}`);
+      const stats = fs.statSync(fullPath);
+      assert.ok(stats.size > 1000, `Image ${imgName} size must be non-trivial (>1KB)`);
+      assert.ok(stats.size < 200000, `Image ${imgName} must be optimized (<200KB for fast ~1s load)`);
+    }
+  });
 });
+

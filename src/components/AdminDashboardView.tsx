@@ -7,15 +7,30 @@ import {
   OrderRecord,
   UserAccount,
   resolveFoodImageUrl,
+  RevenueAnalyticsResponse,
+  RevenueSummary,
+  DailyRevenueReport,
+  ProductSaleMetric,
+  RevenueTransactionRecord,
 } from '../types';
 import {
+  AlertCircle,
+  ArrowUpRight,
+  BarChart3,
   Bell,
+  Calendar,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock,
+  CreditCard,
   Download,
   Edit3,
+  Filter,
   Image,
+  IndianRupee,
   PackagePlus,
+  PieChart,
   Plus,
   Printer,
   QrCode,
@@ -26,6 +41,7 @@ import {
   ToggleLeft,
   ToggleRight,
   Trash2,
+  TrendingUp,
   Users,
   UtensilsCrossed,
   X,
@@ -67,13 +83,13 @@ interface AdminDashboardViewProps {
   onRefreshAll: () => void;
 }
 
-type AdminSection = 'PRODUCTS' | 'ORDERS' | 'STUDENTS' | 'COUPONS' | 'ANNOUNCEMENTS';
+type AdminSection = 'PRODUCTS' | 'ORDERS' | 'REVENUE' | 'STUDENTS' | 'COUPONS' | 'ANNOUNCEMENTS';
 
 const PRESET_PRODUCT_IMAGES = [
-  { label: 'Samosa', url: '/images/samosa.jpg' },
-  { label: 'Veg Puff', url: '/images/veg-puff.jpg' },
-  { label: 'Egg Puff', url: '/images/egg-puff.jpg' },
-  { label: 'Chicken Puff', url: '/images/chicken-puff.jpg' },
+  { label: 'Samosa', url: '/images/samosa.webp' },
+  { label: 'Veg Puff', url: '/images/veg-puff.webp' },
+  { label: 'Egg Puff', url: '/images/egg-puff.webp' },
+  { label: 'Chicken Puff', url: '/images/chicken-puff.webp' },
   {
     label: 'Masala Chai',
     url: 'https://images.unsplash.com/photo-1561336313-0bd5e0b27ec8?w=600&auto=format&fit=crop&q=80',
@@ -128,6 +144,87 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   // Announcements form
   const [annTitle, setAnnTitle] = useState('');
   const [annMsg, setAnnMsg] = useState('');
+
+  // Revenue Analytics state (Requirements #3, #4, #5, #6, #7, #9)
+  const getTodayISTDate = () => {
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+    } catch {
+      return new Date().toISOString().split('T')[0];
+    }
+  };
+
+  const [revenueData, setRevenueData] = useState<RevenueAnalyticsResponse | null>(null);
+  const [revenueDate, setRevenueDate] = useState<string>(getTodayISTDate());
+  const [revenueSearch, setRevenueSearch] = useState('');
+  const [revenueStatusFilter, setRevenueStatusFilter] = useState('ALL');
+  const [revenueLoading, setRevenueLoading] = useState(false);
+  const [revenueError, setRevenueError] = useState<string | null>(null);
+  const [productRankingScope, setProductRankingScope] = useState<'SELECTED_DAY' | 'ALL_TIME'>('SELECTED_DAY');
+
+  const fetchRevenueAnalytics = async (
+    targetDate = revenueDate,
+    targetSearch = revenueSearch,
+    targetStatus = revenueStatusFilter
+  ) => {
+    setRevenueLoading(true);
+    setRevenueError(null);
+    try {
+      const token = localStorage.getItem('nesty_session_token') || '';
+      const params = new URLSearchParams();
+      if (targetDate) params.set('date', targetDate);
+      if (targetSearch) params.set('search', targetSearch);
+      if (targetStatus && targetStatus !== 'ALL') params.set('status', targetStatus);
+
+      const res = await fetch(`/api/admin/revenue/analytics?${params.toString()}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: token ? `Bearer ${token}` : '',
+          'x-admin-email': adminUser?.email || '',
+          'x-admin-role': 'admin',
+        },
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.message || `Failed to fetch revenue analytics (HTTP ${res.status})`);
+      }
+
+      const data: RevenueAnalyticsResponse = await res.json();
+      setRevenueData(data);
+    } catch (err: any) {
+      setRevenueError(err.message || 'Error loading revenue analytics.');
+    } finally {
+      setRevenueLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'REVENUE') {
+      fetchRevenueAnalytics();
+    }
+  }, [activeTab, revenueDate, revenueStatusFilter]);
+
+  const handleRevenueSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    fetchRevenueAnalytics(revenueDate, revenueSearch, revenueStatusFilter);
+  };
+
+  const navigateRevenueDate = (days: number) => {
+    try {
+      const parts = revenueDate.split('-').map(Number);
+      if (parts.length === 3) {
+        const d = new Date(parts[0], parts[1] - 1, parts[2]);
+        d.setDate(d.getDate() + days);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        setRevenueDate(`${y}-${m}-${day}`);
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   const openAddProductModal = () => {
     setEditingItemId(undefined);
@@ -252,22 +349,15 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           <div className="flex flex-wrap items-center gap-2.5">
             <button
               type="button"
-              onClick={openAddProductModal}
-              data-testid="admin_add_products_cta_button"
-              className="px-5 py-3 rounded-2xl bg-nesty-gold text-nesty-textPrimary border-2 border-nesty-cream font-extrabold text-xs sm:text-sm flex items-center gap-2 shadow-lg hover:bg-nesty-goldLight transition"
-            >
-              <PackagePlus className="w-4 h-4 text-nesty-burgundy" />
-              <span>+ Add Products</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={onRefreshAll}
+              onClick={() => {
+                onRefreshAll();
+                if (activeTab === 'REVENUE') fetchRevenueAnalytics();
+              }}
               data-testid="admin_refresh_button"
-              className="px-3.5 py-3 rounded-2xl bg-nesty-cream/15 hover:bg-nesty-cream/25 border border-nesty-gold text-xs font-bold flex items-center gap-1.5 transition"
+              className="px-4 py-2.5 rounded-2xl bg-nesty-cream/15 hover:bg-nesty-cream/25 border border-nesty-gold text-xs font-bold flex items-center gap-2 transition"
             >
               <RefreshCw className="w-4 h-4 text-nesty-gold" />
-              <span>Sync All</span>
+              <span>Sync All Data</span>
             </button>
           </div>
         </div>
@@ -292,7 +382,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Navigation Tabs (Products, Orders, Students, Coupons, Announcements) */}
+      {/* Navigation Tabs (Products, Orders, Revenue, Students, Coupons, Announcements) */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
         {[
           {
@@ -306,6 +396,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             label: `All Orders (${orders.length})`,
             icon: <Receipt className="w-4 h-4" />,
             testId: 'admin_tab_orders',
+          },
+          {
+            id: 'REVENUE' as const,
+            label: 'Revenue',
+            icon: <IndianRupee className="w-4 h-4" />,
+            testId: 'admin_tab_revenue',
           },
           {
             id: 'STUDENTS' as const,
@@ -624,6 +720,612 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* SECTION 3: REVENUE ANALYTICS (Requirements #3, #4, #5, #6, #7, #9) */}
+      {activeTab === 'REVENUE' && (
+        <div data-testid="admin_revenue_section" className="space-y-6">
+          {/* Revenue Header & Controls */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-5 shadow-sm">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-1 rounded-lg bg-nesty-burgundy text-nesty-cream text-[10px] font-black uppercase tracking-wider">
+                  Verified Audit
+                </span>
+                <span className="text-xs font-bold text-nesty-goldDark">
+                  Timezone: Asia/Kolkata (IST GMT+5:30)
+                </span>
+              </div>
+              <h2 className="text-xl font-extrabold text-nesty-burgundy mt-1">
+                Campus Revenue & Financial Analytics
+              </h2>
+              <p className="text-xs text-nesty-textSecondary mt-0.5">
+                Authoritative financial reports computed exclusively from verified payment and order records in the persistent database.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => fetchRevenueAnalytics()}
+                disabled={revenueLoading}
+                data-testid="admin_revenue_refresh_btn"
+                className="px-4 py-2.5 rounded-xl bg-nesty-creamElevated hover:bg-nesty-cream border border-nesty-gold text-nesty-burgundy font-extrabold text-xs flex items-center gap-2 transition disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${revenueLoading ? 'animate-spin' : ''}`} />
+                <span>Refresh Audit</span>
+              </button>
+            </div>
+          </div>
+
+          {revenueError && (
+            <div className="p-4 rounded-2xl bg-nesty-errorBg border border-nesty-error text-nesty-error flex items-center gap-3 text-xs font-bold">
+              <AlertCircle className="w-5 h-5 shrink-0" />
+              <span>{revenueError}</span>
+            </div>
+          )}
+
+          {/* Top Summary Metrics Cards (Requirements #3, #7) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Today's Revenue */}
+            <div
+              data-testid="revenue_metric_today"
+              className="p-5 rounded-3xl bg-nesty-creamSurface border-[1.5px] border-nesty-gold shadow-sm relative overflow-hidden flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-nesty-textSecondary uppercase tracking-wider">
+                    Today's Revenue
+                  </span>
+                  <div className="w-8 h-8 rounded-xl bg-nesty-gold/20 flex items-center justify-center text-nesty-burgundy">
+                    <IndianRupee className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="text-2xl sm:text-3xl font-black text-nesty-burgundy mt-2">
+                  ₹{revenueData ? revenueData.summary.todayRevenue.toLocaleString('en-IN') : '...'}
+                </div>
+              </div>
+              <div className="mt-3 pt-3 border-t border-nesty-creamBorder flex items-center justify-between text-[11px] font-bold text-nesty-textSecondary">
+                <span>{revenueData?.summary.todaySuccessfulPayments || 0} successful txns</span>
+                <span className="text-nesty-burgundy font-extrabold">
+                  {revenueData ? `Net ₹${revenueData.summary.todayNetRevenue.toLocaleString('en-IN')}` : ''}
+                </span>
+              </div>
+            </div>
+
+            {/* Total Historical Revenue */}
+            <div
+              data-testid="revenue_metric_total"
+              className="p-5 rounded-3xl bg-gradient-to-br from-nesty-burgundy to-nesty-burgundyDark text-nesty-cream border-2 border-nesty-gold shadow-md relative overflow-hidden flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-nesty-gold uppercase tracking-wider">
+                    Total Historical Revenue
+                  </span>
+                  <div className="w-8 h-8 rounded-xl bg-nesty-gold/20 flex items-center justify-center text-nesty-gold">
+                    <TrendingUp className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="text-2xl sm:text-3xl font-black text-white mt-2">
+                  ₹{revenueData ? revenueData.summary.totalHistoricalRevenue.toLocaleString('en-IN') : '...'}
+                </div>
+              </div>
+              <div className="mt-3 pt-3 border-t border-nesty-gold/30 text-[11px] text-nesty-cream/80 truncate">
+                {revenueData?.summary.timeRangeLabel || 'All available persistent records'}
+              </div>
+            </div>
+
+            {/* Successful Payments & Orders */}
+            <div
+              data-testid="revenue_metric_payments"
+              className="p-5 rounded-3xl bg-nesty-creamSurface border-[1.5px] border-nesty-gold shadow-sm flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-nesty-textSecondary uppercase tracking-wider">
+                    Successful Payments
+                  </span>
+                  <div className="w-8 h-8 rounded-xl bg-nesty-successBg flex items-center justify-center text-nesty-success">
+                    <CheckCircle2 className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="text-2xl sm:text-3xl font-black text-nesty-textPrimary mt-2">
+                  {revenueData ? revenueData.summary.totalSuccessfulPayments.toLocaleString('en-IN') : '...'}
+                </div>
+              </div>
+              <div className="mt-3 pt-3 border-t border-nesty-creamBorder flex items-center justify-between text-[11px] font-bold text-nesty-textSecondary">
+                <span>Total Orders Placed</span>
+                <span className="font-extrabold text-nesty-burgundy">
+                  {revenueData ? revenueData.summary.totalOrders : '...'}
+                </span>
+              </div>
+            </div>
+
+            {/* Total Products Sold & Unpaid Audit */}
+            <div
+              data-testid="revenue_metric_products"
+              className="p-5 rounded-3xl bg-nesty-creamSurface border-[1.5px] border-nesty-gold shadow-sm flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-nesty-textSecondary uppercase tracking-wider">
+                    Products Sold
+                  </span>
+                  <div className="w-8 h-8 rounded-xl bg-nesty-creamElevated flex items-center justify-center text-nesty-burgundy">
+                    <UtensilsCrossed className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="text-2xl sm:text-3xl font-black text-nesty-textPrimary mt-2">
+                  {revenueData ? revenueData.summary.totalProductsSold.toLocaleString('en-IN') : '...'}
+                </div>
+              </div>
+              <div className="mt-3 pt-3 border-t border-nesty-creamBorder flex items-center justify-between text-[11px] font-bold">
+                <span className="text-nesty-warning">
+                  Pending: {revenueData?.summary.pendingPaymentsCount || 0}
+                </span>
+                <span className="text-nesty-error">
+                  Failed: {revenueData?.summary.failedPaymentsCount || 0}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Date Selection Bar & Quick Navigator (Requirement #4) */}
+          <div className="bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-extrabold text-nesty-burgundy flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-nesty-goldDark" />
+                  <span>Inspect Day Audit & Date-Wise Report</span>
+                </h3>
+                <p className="text-xs text-nesty-textSecondary mt-0.5">
+                  Select any calendar date to audit exact daily transactions, item quantities, and gross vs net revenue.
+                </p>
+              </div>
+
+              {/* Date Controls */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => navigateRevenueDate(-1)}
+                  data-testid="revenue_prev_day_btn"
+                  className="p-2.5 rounded-xl bg-nesty-creamElevated hover:bg-nesty-cream border border-nesty-creamBorder text-nesty-burgundy text-xs font-bold transition flex items-center gap-1"
+                  title="Previous Day"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span className="hidden sm:inline">Prev Day</span>
+                </button>
+
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={revenueDate}
+                    onChange={(e) => setRevenueDate(e.target.value)}
+                    data-testid="revenue_date_picker"
+                    className="px-3.5 py-2 rounded-xl bg-nesty-cream border-2 border-nesty-gold font-mono text-xs font-black text-nesty-burgundy outline-none focus:ring-2 focus:ring-nesty-gold"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => navigateRevenueDate(1)}
+                  data-testid="revenue_next_day_btn"
+                  className="p-2.5 rounded-xl bg-nesty-creamElevated hover:bg-nesty-cream border border-nesty-creamBorder text-nesty-burgundy text-xs font-bold transition flex items-center gap-1"
+                  title="Next Day"
+                >
+                  <span className="hidden sm:inline">Next Day</span>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setRevenueDate(getTodayISTDate())}
+                  data-testid="revenue_today_btn"
+                  className="px-3 py-2 rounded-xl bg-nesty-burgundy text-nesty-cream border border-nesty-gold text-xs font-extrabold hover:bg-nesty-burgundyDark transition"
+                >
+                  Today
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Available Dates Badges */}
+            {revenueData?.summary.availableDates && revenueData.summary.availableDates.length > 0 && (
+              <div className="flex items-center gap-2 overflow-x-auto pt-2 border-t border-nesty-creamBorder text-xs">
+                <span className="text-[11px] font-bold text-nesty-textSecondary whitespace-nowrap">
+                  Active Dates:
+                </span>
+                {revenueData.summary.availableDates.slice(0, 8).map((dStr) => {
+                  const isCurrent = dStr === revenueDate;
+                  return (
+                    <button
+                      key={dStr}
+                      type="button"
+                      onClick={() => setRevenueDate(dStr)}
+                      className={`px-3 py-1 rounded-xl text-xs font-mono font-bold whitespace-nowrap border transition ${
+                        isCurrent
+                          ? 'bg-nesty-gold text-nesty-burgundyDark border-nesty-burgundy font-black shadow-sm'
+                          : 'bg-nesty-creamElevated text-nesty-textSecondary border-nesty-creamBorder hover:text-nesty-burgundy'
+                      }`}
+                    >
+                      {dStr} {dStr === revenueData.summary.todayDate ? '(Today)' : ''}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Selected Day Report Metrics (Requirement #4) */}
+          {revenueData && (
+            <div className="bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-5 shadow-sm space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-nesty-creamBorder pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1 rounded-xl bg-nesty-gold text-nesty-burgundyDark font-black font-mono text-xs border border-nesty-goldDark">
+                    DATE: {revenueData.selectedDayReport.date}
+                  </span>
+                  <span className="text-xs font-bold text-nesty-textSecondary">
+                    Daily Revenue Breakdown
+                  </span>
+                </div>
+                <div className="text-sm font-extrabold text-nesty-burgundy">
+                  Day Net Collected: ₹{revenueData.selectedDayReport.netRevenue.toLocaleString('en-IN')}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                <div className="p-3 rounded-2xl bg-nesty-creamElevated border border-nesty-creamBorder">
+                  <div className="text-[11px] font-bold text-nesty-textSecondary">Day Gross Revenue</div>
+                  <div className="text-lg font-black text-nesty-burgundy mt-0.5">
+                    ₹{revenueData.selectedDayReport.grossRevenue.toLocaleString('en-IN')}
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-nesty-creamElevated border border-nesty-creamBorder">
+                  <div className="text-[11px] font-bold text-nesty-textSecondary">Day Refunds Deducted</div>
+                  <div className="text-lg font-black text-nesty-error mt-0.5">
+                    ₹{revenueData.selectedDayReport.refunds.toLocaleString('en-IN')}
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-nesty-creamElevated border border-nesty-creamBorder">
+                  <div className="text-[11px] font-bold text-nesty-textSecondary">Day Net Revenue</div>
+                  <div className="text-lg font-black text-nesty-success mt-0.5">
+                    ₹{revenueData.selectedDayReport.netRevenue.toLocaleString('en-IN')}
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-nesty-creamElevated border border-nesty-creamBorder">
+                  <div className="text-[11px] font-bold text-nesty-textSecondary">Successful Payments</div>
+                  <div className="text-lg font-black text-nesty-textPrimary mt-0.5">
+                    {revenueData.selectedDayReport.successfulPaymentsCount}
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-nesty-creamElevated border border-nesty-creamBorder">
+                  <div className="text-[11px] font-bold text-nesty-textSecondary">Orders Placed / Paid</div>
+                  <div className="text-lg font-black text-nesty-textPrimary mt-0.5">
+                    {revenueData.selectedDayReport.ordersPlacedCount} / {revenueData.selectedDayReport.ordersPaidCount}
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-nesty-creamElevated border border-nesty-creamBorder">
+                  <div className="text-[11px] font-bold text-nesty-textSecondary">Items Sold That Day</div>
+                  <div className="text-lg font-black text-nesty-textPrimary mt-0.5">
+                    {revenueData.selectedDayReport.productsSoldCount} pcs
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Product-Wise Sales Analytics (Requirement #5) */}
+          <div className="bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-extrabold text-nesty-burgundy flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-nesty-goldDark" />
+                  <span>Product-Wise Sales & Ranking Analytics</span>
+                </h3>
+                <p className="text-xs text-nesty-textSecondary mt-0.5">
+                  Calculated from individual line items of verified orders. Multi-item orders attribute exact item prices and quantities.
+                </p>
+              </div>
+
+              {/* Scope Switcher */}
+              <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-nesty-creamElevated border border-nesty-gold">
+                <button
+                  type="button"
+                  onClick={() => setProductRankingScope('SELECTED_DAY')}
+                  data-testid="product_scope_day_btn"
+                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition ${
+                    productRankingScope === 'SELECTED_DAY'
+                      ? 'bg-nesty-burgundy text-nesty-cream shadow-sm'
+                      : 'text-nesty-textSecondary hover:text-nesty-burgundy'
+                  }`}
+                >
+                  Selected Day ({revenueDate})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProductRankingScope('ALL_TIME')}
+                  data-testid="product_scope_alltime_btn"
+                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition ${
+                    productRankingScope === 'ALL_TIME'
+                      ? 'bg-nesty-burgundy text-nesty-cream shadow-sm'
+                      : 'text-nesty-textSecondary hover:text-nesty-burgundy'
+                  }`}
+                >
+                  All-Time Overview
+                </button>
+              </div>
+            </div>
+
+            {/* Product Sales Ranking Table */}
+            {(() => {
+              const metrics =
+                productRankingScope === 'SELECTED_DAY'
+                  ? revenueData?.selectedDayReport.productSalesBreakdown || []
+                  : revenueData?.allTimeProductSales || [];
+
+              if (metrics.length === 0) {
+                return (
+                  <div className="p-8 text-center bg-nesty-creamElevated rounded-2xl border border-nesty-creamBorder">
+                    <UtensilsCrossed className="w-8 h-8 text-nesty-goldDark mx-auto mb-2 opacity-60" />
+                    <p className="text-sm font-extrabold text-nesty-burgundy">
+                      No product sales recorded for {productRankingScope === 'SELECTED_DAY' ? revenueDate : 'this period'}
+                    </p>
+                    <p className="text-xs text-nesty-textSecondary mt-0.5">
+                      Completed sales with verified payment status will automatically populate this ranking.
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-nesty-gold/40 text-nesty-textSecondary font-black uppercase text-[10px]">
+                        <th className="py-2.5 px-3">Rank</th>
+                        <th className="py-2.5 px-3">Item Name</th>
+                        <th className="py-2.5 px-3 text-center">Type</th>
+                        <th className="py-2.5 px-3 text-right">Quantity Sold</th>
+                        <th className="py-2.5 px-3 text-right">Orders Count</th>
+                        <th className="py-2.5 px-3 text-right">Attributable Sales (₹)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-nesty-creamBorder">
+                      {metrics.map((pMetric, idx) => {
+                        const isTop = idx === 0;
+                        return (
+                          <tr
+                            key={pMetric.productId}
+                            className={`hover:bg-nesty-creamElevated/60 transition ${
+                              isTop ? 'bg-nesty-gold/10 font-bold' : ''
+                            }`}
+                          >
+                            <td className="py-3 px-3">
+                              <span
+                                className={`inline-flex items-center justify-center w-6 h-6 rounded-lg text-[11px] font-black ${
+                                  idx === 0
+                                    ? 'bg-nesty-gold text-nesty-burgundyDark border border-nesty-goldDark'
+                                    : idx === 1
+                                    ? 'bg-nesty-creamElevated border border-nesty-creamBorder text-nesty-textPrimary'
+                                    : 'text-nesty-textSecondary'
+                                }`}
+                              >
+                                #{idx + 1}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 font-extrabold text-nesty-textPrimary">
+                              {pMetric.name}
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                                  pMetric.isVeg
+                                    ? 'bg-nesty-successBg text-nesty-success border border-nesty-success/50'
+                                    : 'bg-nesty-errorBg text-nesty-error border border-nesty-error/50'
+                                }`}
+                              >
+                                {pMetric.isVeg ? 'VEG' : 'NON-VEG'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-right font-black text-nesty-textPrimary">
+                              {pMetric.quantitySold} pcs
+                            </td>
+                            <td className="py-3 px-3 text-right text-nesty-textSecondary">
+                              {pMetric.ordersCount}
+                            </td>
+                            <td className="py-3 px-3 text-right font-black text-nesty-burgundy">
+                              ₹{pMetric.totalSales.toLocaleString('en-IN')}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Transaction Table & Search (Requirement #6) */}
+          <div className="bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-extrabold text-nesty-burgundy flex items-center gap-2">
+                  <CreditCard className="w-4 h-4 text-nesty-goldDark" />
+                  <span>Verified Payment Transactions Table</span>
+                </h3>
+                <p className="text-xs text-nesty-textSecondary mt-0.5">
+                  Detailed payment records with order references, student identifiers, item breakdown, and refund statuses.
+                </p>
+              </div>
+
+              {/* Status Filter */}
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold text-nesty-textSecondary">Status:</span>
+                <select
+                  value={revenueStatusFilter}
+                  onChange={(e) => setRevenueStatusFilter(e.target.value)}
+                  data-testid="revenue_status_filter"
+                  className="px-3 py-1.5 rounded-xl bg-nesty-cream border border-nesty-gold text-xs font-bold text-nesty-burgundy outline-none"
+                >
+                  <option value="ALL">All Payment Statuses</option>
+                  <option value="PAID">PAID / SUCCESS Only</option>
+                  <option value="FAILED">FAILED Only</option>
+                  <option value="PENDING">PENDING Only</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Search Bar Form */}
+            <form onSubmit={handleRevenueSearchSubmit} className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute left-3 top-3 text-nesty-goldDark" />
+                <input
+                  type="text"
+                  value={revenueSearch}
+                  onChange={(e) => setRevenueSearch(e.target.value)}
+                  data-testid="revenue_search_input"
+                  placeholder="Search by Order ID, Transaction ID, Student Name, Student Email, or Item Name..."
+                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-xs focus:ring-2 focus:ring-nesty-gold outline-none"
+                />
+              </div>
+              <button
+                type="submit"
+                data-testid="revenue_search_btn"
+                className="px-4 py-2 rounded-xl bg-nesty-burgundy text-nesty-cream font-extrabold text-xs hover:bg-nesty-burgundyDark transition"
+              >
+                Search
+              </button>
+              {revenueSearch && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRevenueSearch('');
+                    fetchRevenueAnalytics(revenueDate, '', revenueStatusFilter);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-nesty-creamElevated border border-nesty-creamBorder text-xs font-bold text-nesty-textSecondary hover:text-nesty-burgundy"
+                >
+                  Clear
+                </button>
+              )}
+            </form>
+
+            {/* Transactions Table Body */}
+            {revenueLoading ? (
+              <div className="p-12 text-center text-xs text-nesty-textSecondary">
+                <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-nesty-burgundy" />
+                <span>Loading verified transactions...</span>
+              </div>
+            ) : !revenueData || revenueData.selectedDayReport.transactions.length === 0 ? (
+              <div className="p-10 text-center bg-nesty-creamElevated rounded-2xl border border-nesty-creamBorder">
+                <Receipt className="w-8 h-8 text-nesty-goldDark mx-auto mb-2 opacity-60" />
+                <p className="text-sm font-extrabold text-nesty-burgundy">
+                  No payment transactions found for {revenueDate}
+                </p>
+                <p className="text-xs text-nesty-textSecondary mt-0.5">
+                  Try selecting another date from the calendar or clearing your search filters.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRevenueDate(getTodayISTDate());
+                    setRevenueSearch('');
+                    setRevenueStatusFilter('ALL');
+                  }}
+                  className="mt-3 px-4 py-2 rounded-xl bg-nesty-gold text-nesty-burgundyDark text-xs font-black hover:bg-nesty-goldLight transition inline-block"
+                >
+                  View Today's Transactions
+                </button>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-nesty-gold/40 text-nesty-textSecondary font-black uppercase text-[10px]">
+                      <th className="py-2.5 px-3">Date / Time (IST)</th>
+                      <th className="py-2.5 px-3">Order ID</th>
+                      <th className="py-2.5 px-3">Txn Reference</th>
+                      <th className="py-2.5 px-3">Student</th>
+                      <th className="py-2.5 px-3">Items Purchased</th>
+                      <th className="py-2.5 px-3 text-right">Amount (₹)</th>
+                      <th className="py-2.5 px-3 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-nesty-creamBorder">
+                    {revenueData.selectedDayReport.transactions.map((tx) => {
+                      const isPaid = tx.paymentStatus === 'PAID' || tx.paymentStatus === 'SUCCESS';
+                      return (
+                        <tr
+                          key={tx.paymentId || tx.transactionId}
+                          data-testid={`revenue_txn_row_${tx.orderId}`}
+                          className="hover:bg-nesty-creamElevated/60 transition"
+                        >
+                          <td className="py-3 px-3 font-mono text-[11px] text-nesty-textSecondary whitespace-nowrap">
+                            {tx.formattedPaymentTime || tx.paymentDate}
+                          </td>
+                          <td className="py-3 px-3 font-extrabold text-nesty-burgundy whitespace-nowrap">
+                            #{tx.orderId}
+                          </td>
+                          <td className="py-3 px-3 font-mono text-[11px] text-nesty-textPrimary whitespace-nowrap">
+                            {tx.transactionId || 'N/A'}
+                          </td>
+                          <td className="py-3 px-3">
+                            <div className="font-extrabold text-nesty-textPrimary">{tx.studentName}</div>
+                            <div className="text-[10px] text-nesty-textSecondary">{tx.studentEmail}</div>
+                          </td>
+                          <td className="py-3 px-3 max-w-xs">
+                            {tx.items && tx.items.length > 0 ? (
+                              <div className="space-y-0.5">
+                                {tx.items.map((it, itIdx) => (
+                                  <div key={itIdx} className="text-[11px]">
+                                    <span className="font-bold text-nesty-textPrimary">
+                                      {it.quantity}x {it.name}
+                                    </span>
+                                    <span className="text-nesty-textSecondary"> (₹{it.total})</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-nesty-textSecondary italic">No items recorded</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-right whitespace-nowrap">
+                            <div className="font-black text-nesty-burgundy text-sm">
+                              ₹{tx.amount.toLocaleString('en-IN')}
+                            </div>
+                            {tx.refundAmount > 0 && (
+                              <div className="text-[10px] font-bold text-nesty-error">
+                                -₹{tx.refundAmount} refunded
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-center whitespace-nowrap">
+                            <span
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase ${
+                                isPaid
+                                  ? 'bg-nesty-successBg text-nesty-success border border-nesty-success/50'
+                                  : tx.paymentStatus === 'FAILED'
+                                  ? 'bg-nesty-errorBg text-nesty-error border border-nesty-error/50'
+                                  : 'bg-nesty-warningBg text-nesty-warning border border-nesty-warning/50'
+                              }`}
+                            >
+                              {tx.paymentStatus}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

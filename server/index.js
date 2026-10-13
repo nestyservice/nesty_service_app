@@ -162,8 +162,8 @@ const INITIAL_SEED_DATA = {
       category: 'Snacks',
       unit: 'pcs',
       isVeg: true,
-      image: '/images/samosa.jpg',
-      fallbackImage: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=600&auto=format&fit=crop&q=80',
+      image: '/images/samosa.webp',
+      fallbackImage: '/images/samosa.jpg',
       isAvailable: true,
       stockCount: 150,
     },
@@ -175,8 +175,8 @@ const INITIAL_SEED_DATA = {
       category: 'Snacks',
       unit: 'pcs',
       isVeg: true,
-      image: '/images/veg-puff.jpg',
-      fallbackImage: 'https://images.unsplash.com/photo-1628294895950-9805252327bc?w=600&auto=format&fit=crop&q=80',
+      image: '/images/veg-puff.webp',
+      fallbackImage: '/images/veg-puff.jpg',
       isAvailable: true,
       stockCount: 120,
     },
@@ -188,8 +188,8 @@ const INITIAL_SEED_DATA = {
       category: 'Snacks',
       unit: 'pcs',
       isVeg: false,
-      image: '/images/egg-puff.jpg',
-      fallbackImage: 'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?w=600&auto=format&fit=crop&q=80',
+      image: '/images/egg-puff.webp',
+      fallbackImage: '/images/egg-puff.jpg',
       isAvailable: true,
       stockCount: 100,
     },
@@ -201,8 +201,8 @@ const INITIAL_SEED_DATA = {
       category: 'Snacks',
       unit: 'pcs',
       isVeg: false,
-      image: '/images/chicken-puff.jpg',
-      fallbackImage: 'https://images.unsplash.com/photo-1628294895950-9805252327bc?w=600&auto=format&fit=crop&q=80',
+      image: '/images/chicken-puff.webp',
+      fallbackImage: '/images/chicken-puff.jpg',
       isAvailable: true,
       stockCount: 90,
     },
@@ -1754,6 +1754,7 @@ app.patch('/api/admin/orders/:id/status', (req, res) => {
   });
 });
 
+
 // ============================================================================
 // 8. SAFE QR SCANNER VALIDATION ENDPOINT
 // Never marks an unpaid order as paid based on a QR scan!
@@ -1898,16 +1899,372 @@ app.delete('/api/admin/announcements/:id', (req, res) => {
   return res.json({ success: true, announcements: db.announcements, message: 'Announcement deleted.' });
 });
 
-// Serve static assets from public and dist
+// ============================================================================
+// 10. ADMIN REVENUE ANALYTICS ENGINE (Requirements #3, #4, #5, #6, #7, #9)
+// Pure verified backend calculation using Asia/Kolkata timezone
+// ============================================================================
+export function getKolkataDateString(isoString) {
+  if (!isoString) return '';
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(d);
+  } catch {
+    return '';
+  }
+}
+
+export function formatKolkataDateTime(isoString) {
+  if (!isoString) return '';
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    }).format(d);
+  } catch {
+    return isoString;
+  }
+}
+
+export function calculateRevenueAnalytics(db, selectedDateStr, searchQuery = '', paymentStatusFilter = 'ALL') {
+  const orders = db.orders || [];
+  const payments = db.payments || [];
+
+  const orderMap = new Map();
+  for (const o of orders) {
+    if (o && o.id) {
+      orderMap.set(o.id, o);
+    }
+  }
+
+  // Deduplicate payments by transactionId (or payment id if no txnId)
+  // to avoid double-counting duplicate webhooks, callbacks, or retries
+  const seenTxnIds = new Set();
+  const uniquePayments = [];
+  let pendingPaymentsCount = 0;
+  let failedPaymentsCount = 0;
+
+  for (const p of payments) {
+    if (!p) continue;
+    const status = (p.status || '').toUpperCase();
+    if (status === 'PENDING') pendingPaymentsCount++;
+    if (status === 'FAILED') failedPaymentsCount++;
+
+    const isSuccessful = status === 'PAID' || status === 'SUCCESS';
+    const txnKey = p.transactionId ? `txn_${p.transactionId}` : `id_${p.id}`;
+
+    if (isSuccessful) {
+      if (seenTxnIds.has(txnKey)) {
+        continue;
+      }
+      seenTxnIds.add(txnKey);
+    }
+    uniquePayments.push(p);
+  }
+
+  const todayStr = getKolkataDateString(new Date().toISOString());
+  const effectiveSelectedDate = selectedDateStr && /^\d{4}-\d{2}-\d{2}$/.test(selectedDateStr)
+    ? selectedDateStr
+    : todayStr;
+
+  let totalHistoricalRevenue = 0;
+  let totalHistoricalRefunds = 0;
+  let totalSuccessfulPayments = 0;
+  let totalHistoricalProductsSold = 0;
+
+  let todayGrossRevenue = 0;
+  let todayRefunds = 0;
+  let todaySuccessfulPayments = 0;
+  let todayProductsSold = 0;
+
+  let dayGrossRevenue = 0;
+  let dayRefunds = 0;
+  let daySuccessfulPayments = 0;
+  let dayProductsSold = 0;
+  let dayOrdersPlacedCount = 0;
+  let dayOrdersPaidCount = 0;
+
+  const allTimeProductSalesMap = new Map();
+  const dayProductSalesMap = new Map();
+  const availableDatesSet = new Set();
+  if (todayStr) availableDatesSet.add(todayStr);
+
+  const paidOrderIds = new Set();
+
+  for (const p of uniquePayments) {
+    const status = (p.status || '').toUpperCase();
+    const isSuccessful = status === 'PAID' || status === 'SUCCESS';
+    const pmtDateStr = getKolkataDateString(p.createdAt);
+    if (pmtDateStr) availableDatesSet.add(pmtDateStr);
+
+    if (!isSuccessful) continue;
+
+    const amount = Number(p.amount) || 0;
+    const refundAmount = Number(p.refundAmount) || 0;
+
+    totalHistoricalRevenue += amount;
+    totalHistoricalRefunds += refundAmount;
+    totalSuccessfulPayments += 1;
+
+    if (p.orderId) paidOrderIds.add(p.orderId);
+
+    const relatedOrder = p.orderId ? orderMap.get(p.orderId) : null;
+    const orderItems = relatedOrder?.items && Array.isArray(relatedOrder.items)
+      ? relatedOrder.items
+      : [];
+
+    const itemsCountInTxn = orderItems.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0);
+    totalHistoricalProductsSold += itemsCountInTxn;
+
+    for (const it of orderItems) {
+      const pId = it.id || it.name;
+      const q = Number(it.quantity) || 1;
+      const itPrice = Number(it.price) || 0;
+      const itTotal = itPrice * q;
+
+      if (!allTimeProductSalesMap.has(pId)) {
+        allTimeProductSalesMap.set(pId, {
+          productId: pId,
+          name: it.name || 'Unknown Item',
+          quantitySold: 0,
+          ordersCount: 0,
+          totalSales: 0,
+          isVeg: it.isVeg,
+        });
+      }
+      const existing = allTimeProductSalesMap.get(pId);
+      existing.quantitySold += q;
+      existing.ordersCount += 1;
+      existing.totalSales += itTotal;
+    }
+
+    if (pmtDateStr === todayStr) {
+      todayGrossRevenue += amount;
+      todayRefunds += refundAmount;
+      todaySuccessfulPayments += 1;
+      todayProductsSold += itemsCountInTxn;
+    }
+
+    if (pmtDateStr === effectiveSelectedDate) {
+      dayGrossRevenue += amount;
+      dayRefunds += refundAmount;
+      daySuccessfulPayments += 1;
+      dayProductsSold += itemsCountInTxn;
+
+      for (const it of orderItems) {
+        const pId = it.id || it.name;
+        const q = Number(it.quantity) || 1;
+        const itPrice = Number(it.price) || 0;
+        const itTotal = itPrice * q;
+
+        if (!dayProductSalesMap.has(pId)) {
+          dayProductSalesMap.set(pId, {
+            productId: pId,
+            name: it.name || 'Unknown Item',
+            quantitySold: 0,
+            ordersCount: 0,
+            totalSales: 0,
+            isVeg: it.isVeg,
+          });
+        }
+        const existing = dayProductSalesMap.get(pId);
+        existing.quantitySold += q;
+        existing.ordersCount += 1;
+        existing.totalSales += itTotal;
+      }
+    }
+  }
+
+  for (const o of orders) {
+    if (!o) continue;
+    const ordDateStr = getKolkataDateString(o.createdAt);
+    if (ordDateStr) availableDatesSet.add(ordDateStr);
+
+    if (ordDateStr === effectiveSelectedDate) {
+      dayOrdersPlacedCount += 1;
+      const isPaid = (o.paymentStatus || '').toUpperCase() === 'PAID' ||
+                     (o.paymentStatus || '').toUpperCase() === 'SUCCESS' ||
+                     paidOrderIds.has(o.id);
+      if (isPaid) {
+        dayOrdersPaidCount += 1;
+      }
+    }
+  }
+
+  let todayOrdersCount = 0;
+  for (const o of orders) {
+    if (o && getKolkataDateString(o.createdAt) === todayStr) {
+      todayOrdersCount += 1;
+    }
+  }
+
+  const dayTransactions = [];
+  const searchLower = (searchQuery || '').trim().toLowerCase();
+
+  for (const p of uniquePayments) {
+    if (!p) continue;
+    const pmtDateStr = getKolkataDateString(p.createdAt);
+    const relatedOrder = p.orderId ? orderMap.get(p.orderId) : null;
+    const pmtStatus = (p.status || '').toUpperCase();
+
+    const dateMatches = pmtDateStr === effectiveSelectedDate;
+    if (!dateMatches && !searchLower) continue;
+
+    const refundStatus = (p.refundStatus || (Number(p.refundAmount) > 0 ? 'PARTIAL' : 'NONE')).toUpperCase();
+    const amount = Number(p.amount) || 0;
+    const refundAmount = Number(p.refundAmount) || 0;
+
+    const items = relatedOrder?.items && Array.isArray(relatedOrder.items)
+      ? relatedOrder.items.map((it) => ({
+          name: it.name || 'Item',
+          quantity: Number(it.quantity) || 1,
+          price: Number(it.price) || 0,
+          total: (Number(it.price) || 0) * (Number(it.quantity) || 1),
+          isVeg: it.isVeg,
+        }))
+      : [];
+
+    const record = {
+      paymentId: p.id || '',
+      orderId: p.orderId || '',
+      transactionId: p.transactionId || '',
+      paymentMethod: p.paymentMethod || relatedOrder?.paymentMethod || 'Razorpay Gateway',
+      studentName: p.studentName || relatedOrder?.studentName || 'Student',
+      studentEmail: p.studentEmail || relatedOrder?.studentEmail || '',
+      amount,
+      paymentStatus: pmtStatus,
+      refundStatus,
+      refundAmount,
+      netAmount: amount - refundAmount,
+      paymentDate: p.createdAt || '',
+      formattedPaymentTime: formatKolkataDateTime(p.createdAt),
+      items,
+    };
+
+    if (paymentStatusFilter !== 'ALL' && pmtStatus !== paymentStatusFilter) {
+      continue;
+    }
+
+    if (searchLower) {
+      const haystack = [
+        record.orderId,
+        record.transactionId,
+        record.paymentId,
+        record.studentName,
+        record.studentEmail,
+        ...record.items.map((it) => it.name),
+      ].join(' ').toLowerCase();
+
+      if (!haystack.includes(searchLower)) {
+        continue;
+      }
+    }
+
+    dayTransactions.push(record);
+  }
+
+  dayTransactions.sort((a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime());
+
+  const sortedDayProductSales = Array.from(dayProductSalesMap.values()).sort(
+    (a, b) => b.totalSales - a.totalSales || b.quantitySold - a.quantitySold
+  );
+  const sortedAllTimeProductSales = Array.from(allTimeProductSalesMap.values()).sort(
+    (a, b) => b.totalSales - a.totalSales || b.quantitySold - a.quantitySold
+  );
+
+  const sortedAvailableDates = Array.from(availableDatesSet).sort().reverse();
+
+  const oldestDate = sortedAvailableDates[sortedAvailableDates.length - 1] || todayStr;
+  const timeRangeLabel = sortedAvailableDates.length > 1
+    ? `${oldestDate} to ${sortedAvailableDates[0]} (IST)`
+    : `${todayStr} (All Records)`;
+
+  return {
+    summary: {
+      todayRevenue: todayGrossRevenue,
+      todayRefunds,
+      todayNetRevenue: todayGrossRevenue - todayRefunds,
+      todayDate: todayStr,
+      todaySuccessfulPayments,
+      todayProductsSold,
+      todayOrders: todayOrdersCount,
+      totalHistoricalRevenue,
+      totalHistoricalRefunds,
+      totalHistoricalNetRevenue: totalHistoricalRevenue - totalHistoricalRefunds,
+      totalSuccessfulPayments,
+      totalProductsSold: totalHistoricalProductsSold,
+      totalOrders: orders.length,
+      pendingPaymentsCount,
+      failedPaymentsCount,
+      timeRangeLabel,
+      availableDates: sortedAvailableDates,
+    },
+    selectedDayReport: {
+      date: effectiveSelectedDate,
+      formattedDate: effectiveSelectedDate,
+      grossRevenue: dayGrossRevenue,
+      refunds: dayRefunds,
+      netRevenue: dayGrossRevenue - dayRefunds,
+      successfulPaymentsCount: daySuccessfulPayments,
+      ordersPlacedCount: dayOrdersPlacedCount,
+      ordersPaidCount: dayOrdersPaidCount,
+      productsSoldCount: dayProductsSold,
+      productSalesBreakdown: sortedDayProductSales,
+      transactions: dayTransactions,
+    },
+    allTimeProductSales: sortedAllTimeProductSales,
+  };
+}
+
+// Admin Revenue Analytics Endpoint (Requirements #3, #4, #5, #6, #7, #9)
+app.get('/api/admin/revenue/analytics', (req, res) => {
+  const db = loadDb();
+  const admin = requireAdmin(req, res, db);
+  if (!admin) return;
+
+  const date = (req.query.date || '').toString().trim();
+  const search = (req.query.search || '').toString().trim();
+  const statusFilter = (req.query.status || 'ALL').toString().trim().toUpperCase();
+
+  const analytics = calculateRevenueAnalytics(db, date, search, statusFilter);
+  return res.json({ success: true, ...analytics });
+});
+
+// Serve static assets from public and dist with fast caching for food images
+const staticImageHeaders = (res, filePath) => {
+  if (/\.(webp|jpg|jpeg|png|svg|ico)$/i.test(filePath)) {
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+  }
+};
+
 const publicPath = path.join(__dirname, '..', 'public');
 if (fs.existsSync(publicPath)) {
-  app.use(express.static(publicPath));
+  app.use(express.static(publicPath, {
+    maxAge: '1d',
+    setHeaders: staticImageHeaders,
+  }));
 }
 
 // Serve static production frontend build from ../dist
 const distPath = path.join(__dirname, '..', 'dist');
 if (fs.existsSync(distPath)) {
-  app.use(express.static(distPath));
+  app.use(express.static(distPath, {
+    maxAge: '1d',
+    setHeaders: staticImageHeaders,
+  }));
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
     res.sendFile(path.join(distPath, 'index.html'));
