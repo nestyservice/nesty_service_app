@@ -10,7 +10,7 @@ import {
   UserAccount,
 } from './types';
 import { NestySplashOverlay } from './components/NestySplashOverlay';
-import { AuthScreen } from './components/AuthScreen';
+import { AuthScreen, persistStudentToVault } from './components/AuthScreen';
 import {
   NestyTopHeader,
   StudentDestination,
@@ -112,6 +112,9 @@ export const App: React.FC = () => {
       if (token && user) {
         localStorage.setItem(SESSION_TOKEN_KEY, token);
         localStorage.setItem(SESSION_USER_KEY, JSON.stringify(user));
+        if (user.role === 'student') {
+          persistStudentToVault(user);
+        }
       } else {
         localStorage.removeItem(SESSION_TOKEN_KEY);
         localStorage.removeItem(SESSION_USER_KEY);
@@ -178,6 +181,24 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     syncAllFromBackend();
+    // Auto-update student menu items and orders continuously (every 5 seconds)
+    const interval = setInterval(() => {
+      syncAllFromBackend();
+    }, 5000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        syncAllFromBackend();
+      }
+    };
+
+    window.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+    };
   }, [syncAllFromBackend]);
 
   // Unified Login Handler (Requirement #1 & #4)

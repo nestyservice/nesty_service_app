@@ -29,6 +29,70 @@ interface AuthScreenProps {
   onResetPassword?: (email: string, newPassword: string) => void;
 }
 
+const STUDENT_VAULT_KEY = 'nesty_verified_students_vault';
+
+// Save verified student details locally to safeguard against ephemeral server restarts
+export function persistStudentToVault(user: { email: string; name?: string; phone?: string; rollNo?: string; id?: string }) {
+  if (!user || !user.email) return;
+  try {
+    const raw = localStorage.getItem(STUDENT_VAULT_KEY);
+    const vault = raw ? JSON.parse(raw) : {};
+    const emailKey = user.email.toLowerCase().trim();
+    const record = {
+      id: user.id || `usr_${Date.now()}`,
+      email: emailKey,
+      name: user.name || '',
+      phone: user.phone || '',
+      rollNo: (user.rollNo || '').toUpperCase().trim(),
+      role: 'student',
+      emailVerified: true,
+      lastSaved: new Date().toISOString(),
+    };
+    vault[emailKey] = record;
+    if (record.rollNo) {
+      vault[record.rollNo] = record;
+    }
+    if (record.phone) {
+      vault[record.phone] = record;
+    }
+    localStorage.setItem(STUDENT_VAULT_KEY, JSON.stringify(vault));
+  } catch {
+    // localStorage may be disabled or quota reached
+  }
+}
+
+// Check vault and attempt auto-restore if server restarted and lost runtime accounts
+async function autoRestoreFromVault(identifier: string, password: string) {
+  try {
+    const raw = localStorage.getItem(STUDENT_VAULT_KEY);
+    if (!raw) return null;
+    const vault = JSON.parse(raw);
+    const cleanId = identifier.trim();
+    const entry = vault[cleanId.toLowerCase()] || vault[cleanId.toUpperCase()] || vault[cleanId];
+    if (!entry || !entry.email) return null;
+
+    const res = await fetch('/api/auth/restore-verified-account', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: entry.email,
+        name: entry.name,
+        phone: entry.phone,
+        rollNo: entry.rollNo,
+        password: password,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok && data.success && data.token && data.user) {
+      persistStudentToVault(data.user);
+      return data;
+    }
+  } catch {
+    // Ignore error
+  }
+  return null;
+}
+
 export const AuthScreen: React.FC<AuthScreenProps> = ({
   isLoading: externalLoading,
   onLogin,
@@ -97,6 +161,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     return () => clearInterval(timer);
   }, [resendCooldown]);
 
+
   // Handle Unified Login Form Submission
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,9 +187,22 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         setVerifyingSuccess(data.message || 'A verification code has been dispatched to your registered college email.');
         setVerifyingError(null);
       } else if (!res.ok || !data.success) {
+        // Try auto-restoring from student vault in case server was restarted/rebooted on Render
+        const restored = await autoRestoreFromVault(loginIdentifier.trim(), loginPassword);
+        if (restored) {
+          if (onSessionEstablished) {
+            onSessionEstablished(restored.token, restored.user);
+          } else {
+            onLogin(loginIdentifier.trim(), loginPassword);
+          }
+          return;
+        }
         setAuthFeedback({ message: data.message || 'Invalid credentials. Please verify your email/roll number and password.', isError: true });
       } else {
         // Successful login without OTP
+        if (data.user) {
+          persistStudentToVault(data.user);
+        }
         if (onSessionEstablished) {
           onSessionEstablished(data.token, data.user);
         } else {
@@ -132,6 +210,16 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         }
       }
     } catch {
+      // Also try auto-restoring if network/server had transient issue
+      const restored = await autoRestoreFromVault(loginIdentifier.trim(), loginPassword);
+      if (restored) {
+        if (onSessionEstablished) {
+          onSessionEstablished(restored.token, restored.user);
+        } else {
+          onLogin(loginIdentifier.trim(), loginPassword);
+        }
+        return;
+      }
       setAuthFeedback({ message: 'Network error connecting to NESTY server. Please check your connection.', isError: true });
     } finally {
       setIsSubmitting(false);
@@ -160,6 +248,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
       if (data.requiresVerification && data.email) {
         // Transition directly to OTP verification screen before granting dashboard access
+        persistStudentToVault({
+          email: regEmail.trim(),
+          name: regName.trim(),
+          phone: regPhone.trim(),
+          rollNo: regRollNo.trim(),
+        });
         setVerifyingEmail(data.email);
         setIsVerifyingEmail(true);
         setVerifyingCooldown(60);
@@ -168,6 +262,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       } else if (!res.ok || !data.success) {
         setAuthFeedback({ message: data.message || 'Registration failed. Please check your details.', isError: true });
       } else {
+        if (data.user) {
+          persistStudentToVault(data.user);
+        }
         if (onSessionEstablished) {
           onSessionEstablished(data.token, data.user);
         } else {
@@ -208,6 +305,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         setVerifyingError(data.message || 'Invalid OTP');
       } else {
         setVerifyingSuccess('Email verified successfully! Opening your canteen tray...');
+        if (data.user) {
+          persistStudentToVault(data.user);
+        }
         setTimeout(() => {
           if (onSessionEstablished) {
             onSessionEstablished(data.token, data.user);
@@ -520,7 +620,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                         type="text"
                         value={loginIdentifier}
                         onChange={(e) => setLoginIdentifier(e.target.value)}
-                        placeholder="student@cvr.ac.in or 22B81A0501"
+                        placeholder="Enter college email or roll number"
                         data-testid="login_email_input"
                         required
                         autoComplete="username"
@@ -604,7 +704,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                         type="text"
                         value={regName}
                         onChange={(e) => setRegName(e.target.value)}
-                        placeholder="Aarav Reddy"
+                        placeholder="Enter full name"
                         data-testid="register_name_input"
                         required
                         className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-nesty-creamSurface border border-nesty-creamBorder text-sm focus:outline-none focus:border-nesty-burgundy"
@@ -622,7 +722,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                         type="email"
                         value={regEmail}
                         onChange={(e) => setRegEmail(e.target.value)}
-                        placeholder="22b81a0501@cvr.ac.in"
+                        placeholder="Enter college email address"
                         data-testid="register_email_input"
                         required
                         className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-nesty-creamSurface border border-nesty-creamBorder text-sm focus:outline-none focus:border-nesty-burgundy"
@@ -641,7 +741,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                           type="text"
                           value={regRollNo}
                           onChange={(e) => setRegRollNo(e.target.value.toUpperCase())}
-                          placeholder="22B81A0501"
+                          placeholder="Enter roll number"
                           data-testid="register_roll_input"
                           required
                           className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-nesty-creamSurface border border-nesty-creamBorder text-xs focus:outline-none focus:border-nesty-burgundy"
@@ -658,7 +758,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                           type="tel"
                           value={regPhone}
                           onChange={(e) => setRegPhone(e.target.value)}
-                          placeholder="9848012345"
+                          placeholder="Enter 10-digit phone number"
                           data-testid="register_phone_input"
                           required
                           className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-nesty-creamSurface border border-nesty-creamBorder text-xs focus:outline-none focus:border-nesty-burgundy"
@@ -760,7 +860,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                       type="email"
                       value={resetEmail}
                       onChange={(e) => setResetEmail(e.target.value)}
-                      placeholder="student@cvr.ac.in"
+                      placeholder="Enter registered college email"
                       required
                       data-testid="forgot_password_email_input"
                       className="w-full pl-9 pr-3 py-2 rounded-xl bg-nesty-creamSurface border border-nesty-creamBorder text-xs focus:outline-none focus:border-nesty-burgundy"

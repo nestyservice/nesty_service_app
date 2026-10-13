@@ -6,6 +6,7 @@ import {
   MenuItem,
   OrderRecord,
   UserAccount,
+  resolveFoodImageUrl,
 } from '../types';
 import {
   Bell,
@@ -69,10 +70,10 @@ interface AdminDashboardViewProps {
 type AdminSection = 'PRODUCTS' | 'ORDERS' | 'STUDENTS' | 'COUPONS' | 'ANNOUNCEMENTS';
 
 const PRESET_PRODUCT_IMAGES = [
-  { label: 'Samosa', url: 'https://deliz-canteen.onrender.com/images/samosa.png' },
-  { label: 'Veg Puff', url: 'https://deliz-canteen.onrender.com/images/veg-puff.png' },
-  { label: 'Egg Puff', url: 'https://deliz-canteen.onrender.com/images/egg-puff.png' },
-  { label: 'Chicken Puff', url: 'https://deliz-canteen.onrender.com/images/chicken-puff.png' },
+  { label: 'Samosa', url: '/images/samosa.jpg' },
+  { label: 'Veg Puff', url: '/images/veg-puff.jpg' },
+  { label: 'Egg Puff', url: '/images/egg-puff.jpg' },
+  { label: 'Chicken Puff', url: '/images/chicken-puff.jpg' },
   {
     label: 'Masala Chai',
     url: 'https://images.unsplash.com/photo-1561336313-0bd5e0b27ec8?w=600&auto=format&fit=crop&q=80',
@@ -107,7 +108,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [prodCategory, setProdCategory] = useState('Snacks');
   const [prodUnit, setProdUnit] = useState('pcs');
   const [prodIsVeg, setProdIsVeg] = useState(true);
-  const [prodImage, setProdImage] = useState('https://deliz-canteen.onrender.com/images/samosa.png');
+  const [prodImage, setProdImage] = useState('/images/samosa.jpg');
   const [prodAvailable, setProdAvailable] = useState(true);
   const [prodStock, setProdStock] = useState('100');
   const [prodFormError, setProdFormError] = useState<string | null>(null);
@@ -136,7 +137,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     setProdCategory('Snacks');
     setProdUnit('pcs');
     setProdIsVeg(true);
-    setProdImage('https://deliz-canteen.onrender.com/images/samosa.png');
+    setProdImage('/images/samosa.jpg');
     setProdAvailable(true);
     setProdStock('100');
     setProdFormError(null);
@@ -194,7 +195,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       category: prodCategory.trim() || 'Snacks',
       unit: prodUnit.trim() || 'pcs',
       isVeg: prodIsVeg,
-      image: prodImage.trim() || 'https://deliz-canteen.onrender.com/images/samosa.png',
+      image: prodImage.trim() || '/images/samosa.jpg',
       isAvailable: prodAvailable,
       stockCount: Number(prodStock) || 100,
     });
@@ -378,11 +379,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 <div>
                   <div className="relative h-40 bg-nesty-creamElevated">
                     <img
-                      src={item.image}
+                      src={resolveFoodImageUrl(item.image)}
                       onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = item.fallbackImage;
+                        (e.currentTarget as HTMLImageElement).src = '/images/samosa.jpg';
                       }}
                       alt={item.name}
+                      loading="eager"
                       className="w-full h-full object-cover"
                     />
                     <div className="absolute top-3 left-3 px-2.5 py-1 rounded-lg bg-nesty-creamSurface/95 border border-nesty-gold text-[10px] font-extrabold">
@@ -979,7 +981,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     type="text"
                     value={prodImage}
                     onChange={(e) => setProdImage(e.target.value)}
-                    placeholder="https://deliz-canteen.onrender.com/images/samosa.png"
+                    placeholder="/images/samosa.jpg"
                     data-testid="product_image_input"
                     className="flex-1 px-3 py-2 rounded-xl bg-nesty-cream border border-nesty-creamBorder text-xs"
                   />

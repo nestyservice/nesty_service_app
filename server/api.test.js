@@ -498,4 +498,62 @@ test('NESTY Complete End-to-End System Verification Suite (Requirements 1-11)', 
     assert.ok(matchedAdminOrder, 'Admin orders search by pickupToken must find the order');
     assert.equal(matchedAdminOrder.pickupToken, paidOrderObj.pickupToken);
   });
+
+  // -------------------------------------------------------------------------
+  // TEST R: Auto-restore verified student account endpoint works seamlessly.
+  // -------------------------------------------------------------------------
+  await t.test('Test R: Auto-restore verified student account persists student across resets', async () => {
+    const timestamp = Date.now();
+    const restoreEmail = `restore_student_${timestamp}@cvr.ac.in`;
+    const restoreRoll = `24B81A${timestamp % 10000}`;
+    const restorePhone = `98480${(timestamp % 90000) + 10000}`;
+    const restoreRes = await requestJson(server, 'POST', '/api/auth/restore-verified-account', {
+      email: restoreEmail,
+      name: 'Restored Student',
+      phone: restorePhone,
+      rollNo: restoreRoll,
+      password: 'mypassword123',
+    });
+
+    assert.equal(restoreRes.status, 200);
+    assert.equal(restoreRes.data.success, true);
+    assert.ok(restoreRes.data.token, 'Must return auth token upon restore');
+    assert.equal(restoreRes.data.user.email, restoreEmail);
+
+    // Verify ordinary login now works with the restored account
+    const loginRes = await requestJson(server, 'POST', '/api/auth/login', {
+      identifier: restoreEmail,
+      password: 'mypassword123',
+    });
+    assert.equal(loginRes.status, 200);
+    assert.equal(loginRes.data.success, true);
+
+    // Verify phone login works with the restored account
+    const phoneLoginRes = await requestJson(server, 'POST', '/api/auth/login', {
+      identifier: restorePhone,
+      password: 'mypassword123',
+    });
+    assert.equal(phoneLoginRes.status, 200);
+    assert.equal(phoneLoginRes.data.success, true);
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST S: Menu uses local fast images without deliz-canteen URLs.
+  // -------------------------------------------------------------------------
+  await t.test('Test S: Menu catalog items use local instant images', async () => {
+
+    const menuRes = await requestJson(server, 'GET', '/api/menu');
+    assert.equal(menuRes.status, 200);
+    assert.ok(menuRes.data.items.length > 0);
+    for (const item of menuRes.data.items) {
+      assert.ok(
+        !item.image.includes('deliz-canteen.onrender.com'),
+        `Item ${item.name} image must not use lagging deliz-canteen URL`
+      );
+      assert.ok(
+        item.image.startsWith('/images/'),
+        `Item ${item.name} image should use local /images/ path: got ${item.image}`
+      );
+    }
+  });
 });

@@ -5,6 +5,7 @@ import {
   OrderRecord,
   PaymentRecord,
   UserAccount,
+  resolveFoodImageUrl,
 } from '../types';
 import {
   AlertCircle,
@@ -35,7 +36,7 @@ interface StudentMenuViewProps {
   onUpdateCartQuantity: (itemId: string, delta: number) => void;
   onOpenCart: () => void;
   onOpenOrderDetails: (order: OrderRecord) => void;
-  onRefreshMenu: () => void;
+  onRefreshMenu?: () => void;
 }
 
 export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
@@ -89,15 +90,10 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={onRefreshMenu}
-            data-testid="refresh_menu_button"
-            className="self-start sm:self-auto px-4 py-2.5 rounded-xl bg-nesty-cream/15 hover:bg-nesty-cream/25 border border-nesty-gold text-xs font-bold flex items-center gap-1.5 transition"
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-nesty-gold" />
-            <span>Sync Menu</span>
-          </button>
+          <div className="self-start sm:self-auto px-3.5 py-1.5 rounded-xl bg-nesty-cream/10 border border-nesty-gold/40 text-[11px] font-bold text-nesty-gold flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span>Live Counter Catalog</span>
+          </div>
         </div>
       </div>
 
@@ -225,11 +221,13 @@ export const StudentMenuView: React.FC<StudentMenuViewProps> = ({
                 <div>
                   <div className="relative h-44 w-full bg-nesty-creamElevated overflow-hidden">
                     <img
-                      src={item.image}
+                      src={resolveFoodImageUrl(item.image)}
                       onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = item.fallbackImage;
+                        (e.currentTarget as HTMLImageElement).src = '/images/samosa.jpg';
                       }}
                       alt={item.name}
+                      loading="eager"
+                      decoding="async"
                       className="w-full h-full object-cover"
                     />
                     <div className="absolute top-3 left-3 px-2.5 py-1 rounded-lg bg-nesty-creamSurface/95 border border-nesty-gold flex items-center gap-1.5 shadow-sm">

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CouponRecord, MenuItem, UserAccount } from '../types';
+import { CouponRecord, MenuItem, UserAccount, resolveFoodImageUrl } from '../types';
 import {
   AlertCircle,
   CreditCard,
@@ -334,11 +334,12 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <img
-                      src={item.image}
+                      src={resolveFoodImageUrl(item.image)}
                       onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = item.fallbackImage;
+                        (e.currentTarget as HTMLImageElement).src = '/images/samosa.jpg';
                       }}
                       alt={item.name}
+                      loading="eager"
                       className="w-12 h-12 rounded-xl object-cover border border-nesty-gold shrink-0"
                     />
                     <div className="min-w-0">

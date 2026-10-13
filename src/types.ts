@@ -108,3 +108,18 @@ export interface QrValidationResult {
   order?: OrderRecord;
   couponCode?: string;
 }
+
+export function resolveFoodImageUrl(url?: string): string {
+  if (!url) return '/images/samosa.jpg';
+  const clean = url.trim();
+  if (clean.includes('deliz-canteen.onrender.com/images/')) {
+    const match = clean.match(/([^/]+)\.(?:png|jpg|jpeg)$/i);
+    if (match) {
+      const name = match[1];
+      return `/images/${name}.jpg`;
+    }
+    return '/images/samosa.jpg';
+  }
+  return clean;
+}
+

@@ -26,9 +26,22 @@ const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'nesty_rzp_server
 const APP_URL = process.env.APP_URL || 'https://nesty-service-app.onrender.com';
 
 const DATA_DIR = path.join(__dirname, 'data');
-const DB_FILE = process.env.DATABASE_FILE_PATH
-  ? path.resolve(process.cwd(), process.env.DATABASE_FILE_PATH)
-  : path.join(DATA_DIR, 'nesty_shared_db.json');
+
+function resolveDbFilePath() {
+  if (process.env.DATABASE_FILE_PATH) {
+    return path.resolve(process.cwd(), process.env.DATABASE_FILE_PATH);
+  }
+  // Check for standard persistent disk mounts on Render / Docker
+  if (fs.existsSync('/var/data') && fs.statSync('/var/data').isDirectory()) {
+    return '/var/data/nesty_shared_db.json';
+  }
+  if (fs.existsSync('/data') && fs.statSync('/data').isDirectory()) {
+    return '/data/nesty_shared_db.json';
+  }
+  return path.join(DATA_DIR, 'nesty_shared_db.json');
+}
+
+const DB_FILE = resolveDbFilePath();
 
 // Ensure data directory exists
 if (!fs.existsSync(path.dirname(DB_FILE))) {
@@ -149,7 +162,7 @@ const INITIAL_SEED_DATA = {
       category: 'Snacks',
       unit: 'pcs',
       isVeg: true,
-      image: 'https://deliz-canteen.onrender.com/images/samosa.png',
+      image: '/images/samosa.jpg',
       fallbackImage: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=600&auto=format&fit=crop&q=80',
       isAvailable: true,
       stockCount: 150,
@@ -162,7 +175,7 @@ const INITIAL_SEED_DATA = {
       category: 'Snacks',
       unit: 'pcs',
       isVeg: true,
-      image: 'https://deliz-canteen.onrender.com/images/veg-puff.png',
+      image: '/images/veg-puff.jpg',
       fallbackImage: 'https://images.unsplash.com/photo-1628294895950-9805252327bc?w=600&auto=format&fit=crop&q=80',
       isAvailable: true,
       stockCount: 120,
@@ -175,7 +188,7 @@ const INITIAL_SEED_DATA = {
       category: 'Snacks',
       unit: 'pcs',
       isVeg: false,
-      image: 'https://deliz-canteen.onrender.com/images/egg-puff.png',
+      image: '/images/egg-puff.jpg',
       fallbackImage: 'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?w=600&auto=format&fit=crop&q=80',
       isAvailable: true,
       stockCount: 100,
@@ -188,7 +201,7 @@ const INITIAL_SEED_DATA = {
       category: 'Snacks',
       unit: 'pcs',
       isVeg: false,
-      image: 'https://deliz-canteen.onrender.com/images/chicken-puff.png',
+      image: '/images/chicken-puff.jpg',
       fallbackImage: 'https://images.unsplash.com/photo-1628294895950-9805252327bc?w=600&auto=format&fit=crop&q=80',
       isAvailable: true,
       stockCount: 90,
@@ -227,6 +240,39 @@ const INITIAL_SEED_DATA = {
       emailVerified: true,
       passwordHash: hashPassword('student123'),
       createdAt: '2026-09-12T11:15:00Z',
+    },
+    {
+      email: 'test_student_1791714438197@cvr.ac.in',
+      id: 'usr_45dea75b',
+      name: 'Priya Sharma',
+      phone: '9876501234',
+      rollNo: '23B81A3913',
+      role: 'student',
+      emailVerified: true,
+      passwordHash: 'bdc5fbf2ec071c638c21bbe78e8c067894072b8a6bc6a6751b08540476f0f780',
+      createdAt: '2026-10-11T10:27:18.198Z',
+    },
+    {
+      email: 'fresh_student_1791725806679@cvr.ac.in',
+      id: 'usr_7ed9f61d',
+      name: 'Fresh Student',
+      phone: '9848012345',
+      rollNo: '24B81A4430',
+      role: 'student',
+      emailVerified: true,
+      passwordHash: '5b1a0bb5735c558becb2cf32633ae3682d7d0df97940a0980053401fb0094812',
+      createdAt: '2026-10-11T13:36:46.682Z',
+    },
+    {
+      email: 'test_student_1791823480136@cvr.ac.in',
+      id: 'usr_78f8c4a0',
+      name: 'Test Student',
+      phone: '9848012345',
+      rollNo: '24B81A2115',
+      role: 'student',
+      emailVerified: true,
+      passwordHash: '8f349c200317636703e9eb6551054fac31b6c98dd7c8f98d8adbb1e1dd599af1',
+      createdAt: '2026-10-12T16:44:40.201Z',
     },
   ],
   coupons: [
@@ -439,12 +485,14 @@ app.post('/api/auth/login', async (req, res) => {
     });
   }
 
-  // Look up user by email OR roll number (case-insensitive and trimmed)
+  // Look up user by email OR roll number OR phone number (case-insensitive and trimmed)
+  const cleanDigits = rawIdentifier.replace(/\D/g, '');
   let user = db.users.find(
     (u) =>
       u.email.toLowerCase() === identifierLower ||
       (u.rollNo && u.rollNo.toUpperCase() === rawIdentifier.toUpperCase()) ||
-      (u.rollNo && u.rollNo.toLowerCase() === identifierLower)
+      (u.rollNo && u.rollNo.toLowerCase() === identifierLower) ||
+      (cleanDigits.length >= 10 && u.phone && u.phone.replace(/\D/g, '') === cleanDigits)
   );
 
   // Auto-seed admin user if configured in env
@@ -530,6 +578,60 @@ app.post('/api/auth/login', async (req, res) => {
     success: true,
     token,
     user: sanitizeUser(user),
+  });
+});
+
+// Endpoint to auto-restore verified student accounts from client vault across ephemeral server restarts
+app.post('/api/auth/restore-verified-account', (req, res) => {
+  const db = loadDb();
+  const email = (req.body?.email || '').toString().trim().toLowerCase();
+  const rollNo = (req.body?.rollNo || '').toString().trim().toUpperCase();
+  const name = (req.body?.name || '').toString().trim();
+  const phone = (req.body?.phone || '').toString().trim();
+  const password = (req.body?.password || '').toString();
+
+  if (!email || !email.includes('@') || !password) {
+    return res.status(400).json({ success: false, message: 'Invalid restore credentials.' });
+  }
+
+  let user = db.users.find(
+    (u) =>
+      u.email.toLowerCase() === email ||
+      (rollNo && u.rollNo && u.rollNo.toUpperCase() === rollNo)
+  );
+
+  if (!user) {
+    user = {
+      email,
+      id: `usr_${crypto.randomBytes(4).toString('hex')}`,
+      name: name || 'Student',
+      phone: phone || '',
+      rollNo: rollNo || '',
+      role: 'student',
+      emailVerified: true,
+      passwordHash: hashPassword(password.trim()),
+      createdAt: new Date().toISOString(),
+    };
+    db.users.push(user);
+    saveDb(db);
+  } else {
+    // Ensure verified and update password hash if changed
+    if (!verifyPassword(password, user.passwordHash)) {
+      user.passwordHash = hashPassword(password.trim());
+    }
+    user.emailVerified = true;
+    if (name && !user.name) user.name = name;
+    if (phone && !user.phone) user.phone = phone;
+    if (rollNo && !user.rollNo) user.rollNo = rollNo;
+    saveDb(db);
+  }
+
+  const token = createAuthToken(user);
+  return res.json({
+    success: true,
+    token,
+    user: sanitizeUser(user),
+    message: 'Account restored and authenticated successfully.',
   });
 });
 
@@ -1036,7 +1138,7 @@ app.post('/api/admin/menu', (req, res) => {
     category: (category || 'Snacks').toString().trim() || 'Snacks',
     unit: (unit || 'pcs').toString().trim() || 'pcs',
     isVeg: isVeg !== undefined ? Boolean(isVeg) : true,
-    image: (image || '').toString().trim() || 'https://deliz-canteen.onrender.com/images/samosa.png',
+    image: (image || '').toString().trim() || '/images/samosa.jpg',
     fallbackImage: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=600&auto=format&fit=crop&q=80',
     isAvailable: isAvailable !== undefined ? Boolean(isAvailable) : true,
     stockCount: Number.isFinite(Number(stockCount)) ? Number(stockCount) : 100,
@@ -1795,6 +1897,12 @@ app.delete('/api/admin/announcements/:id', (req, res) => {
   saveDb(db);
   return res.json({ success: true, announcements: db.announcements, message: 'Announcement deleted.' });
 });
+
+// Serve static assets from public and dist
+const publicPath = path.join(__dirname, '..', 'public');
+if (fs.existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+}
 
 // Serve static production frontend build from ../dist
 const distPath = path.join(__dirname, '..', 'dist');
