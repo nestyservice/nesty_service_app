@@ -110,16 +110,102 @@ export interface QrValidationResult {
 }
 
 export function resolveFoodImageUrl(url?: string): string {
-  if (!url) return '/images/samosa.jpg';
+  if (!url) return '/images/samosa.webp';
   const clean = url.trim();
+
+  // Known optimized static local food images
+  if (clean.includes('egg-puff')) return '/images/egg-puff.webp';
+  if (clean.includes('chicken-puff')) return '/images/chicken-puff.webp';
+  if (clean.includes('veg-puff')) return '/images/veg-puff.webp';
+  if (clean.includes('samosa')) return '/images/samosa.webp';
+
   if (clean.includes('deliz-canteen.onrender.com/images/')) {
-    const match = clean.match(/([^/]+)\.(?:png|jpg|jpeg)$/i);
+    const match = clean.match(/([^/]+)\.(?:png|jpg|jpeg|webp)$/i);
     if (match) {
       const name = match[1];
+      if (['egg-puff', 'chicken-puff', 'veg-puff', 'samosa'].includes(name)) {
+        return `/images/${name}.webp`;
+      }
       return `/images/${name}.jpg`;
     }
-    return '/images/samosa.jpg';
+    return '/images/samosa.webp';
   }
   return clean;
+}
+
+export interface ProductSaleMetric {
+  productId: string;
+  name: string;
+  category?: string;
+  quantitySold: number;
+  ordersCount: number;
+  totalSales: number;
+  isVeg?: boolean;
+}
+
+export interface RevenueTransactionItem {
+  name: string;
+  quantity: number;
+  price: number;
+  total: number;
+  isVeg?: boolean;
+}
+
+export interface RevenueTransactionRecord {
+  paymentId: string;
+  orderId: string;
+  transactionId: string;
+  paymentMethod: string;
+  studentName: string;
+  studentEmail: string;
+  amount: number;
+  paymentStatus: 'PAID' | 'SUCCESS' | 'FAILED' | 'PENDING';
+  refundStatus: 'NONE' | 'REFUNDED' | 'PARTIAL';
+  refundAmount: number;
+  netAmount: number;
+  paymentDate: string;
+  formattedPaymentTime: string;
+  items: RevenueTransactionItem[];
+}
+
+export interface DailyRevenueReport {
+  date: string;
+  formattedDate: string;
+  grossRevenue: number;
+  refunds: number;
+  netRevenue: number;
+  successfulPaymentsCount: number;
+  ordersPlacedCount: number;
+  ordersPaidCount: number;
+  productsSoldCount: number;
+  productSalesBreakdown: ProductSaleMetric[];
+  transactions: RevenueTransactionRecord[];
+}
+
+export interface RevenueSummary {
+  todayRevenue: number;
+  todayRefunds: number;
+  todayNetRevenue: number;
+  todayDate: string;
+  todaySuccessfulPayments: number;
+  todayProductsSold: number;
+  todayOrders: number;
+  totalHistoricalRevenue: number;
+  totalHistoricalRefunds: number;
+  totalHistoricalNetRevenue: number;
+  totalSuccessfulPayments: number;
+  totalProductsSold: number;
+  totalOrders: number;
+  pendingPaymentsCount: number;
+  failedPaymentsCount: number;
+  timeRangeLabel: string;
+  availableDates: string[];
+}
+
+export interface RevenueAnalyticsResponse {
+  success: boolean;
+  summary: RevenueSummary;
+  selectedDayReport: DailyRevenueReport;
+  allTimeProductSales: ProductSaleMetric[];
 }
 
