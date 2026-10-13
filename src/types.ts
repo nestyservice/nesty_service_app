@@ -25,21 +25,37 @@ export interface OrderRecord {
   studentEmail: string;
   studentName: string;
   studentPhone: string;
-  block: string;
+  block?: string;
   items: OrderItem[];
   totalAmount: number;
   discount: number;
   finalAmount: number;
-  coinsEarned: number;
-  coinsRedeemed: number;
+  coinsEarned?: number;
+  coinsRedeemed?: number;
   paymentMethod: string;
   transactionId: string;
   razorpayOrderId?: string | null;
-  paymentStatus: 'PAID' | 'SUCCESS' | 'FAILED';
+  paymentStatus: 'PAID' | 'SUCCESS' | 'FAILED' | 'PENDING';
   orderStatus: 'PENDING_PICKUP' | 'PREPARING' | 'READY' | 'CLAIMED' | 'CANCELLED';
+  pickupToken?: string;
   failureReason?: string;
   claimedBy?: string | null;
   claimedAt?: string | null;
+  createdAt: string;
+}
+
+export interface PaymentRecord {
+  id: string;
+  orderId: string;
+  studentEmail: string;
+  studentName: string;
+  amount: number;
+  currency: string;
+  paymentMethod: string;
+  transactionId: string;
+  razorpayOrderId?: string | null;
+  status: 'PAID' | 'SUCCESS' | 'FAILED' | 'PENDING';
+  failureReason?: string;
   createdAt: string;
 }
 
@@ -49,9 +65,9 @@ export interface UserAccount {
   name: string;
   phone: string;
   rollNo: string;
-  block: string;
+  block?: string;
   role: 'student' | 'admin';
-  coins: number;
+  coins?: number;
   createdAt: string;
 }
 
@@ -71,19 +87,39 @@ export interface AnnouncementRecord {
   createdAt: string;
 }
 
+export interface DailyTokenRecord {
+  id: string;
+  studentEmail: string;
+  studentName: string;
+  rollNo: string;
+  code: string; // Exactly 3 chars: 1 alphabet + 2 numbers (e.g. 'A42')
+  date: string; // 'YYYY-MM-DD'
+  status: 'ACTIVE' | 'EXPIRED';
+  createdAt: string;
+  expiredAt?: string | null;
+  expiredBy?: string | null;
+}
+
 export interface QrValidationResult {
   valid: boolean;
-  type: 'ORDER_RECEIPT' | 'PROMO_COUPON' | 'CAMPUS_COUNTER' | 'INVALID';
+  type: 'ORDER_RECEIPT' | 'PROMO_COUPON' | 'INVALID';
   title: string;
   subtitle: string;
   order?: OrderRecord;
   couponCode?: string;
-  block?: string;
 }
 
-export const CAMPUS_BLOCKS = [
-  { id: 'CB', code: 'CB', name: 'Civil Block' },
-  { id: 'CM', code: 'CM', name: 'Computer Science and Mechanical Block' },
-  { id: 'FB', code: 'FB', name: 'First year Block' },
-  { id: 'PG', code: 'PG', name: 'Post Graduate Block' },
-];
+export function resolveFoodImageUrl(url?: string): string {
+  if (!url) return '/images/samosa.jpg';
+  const clean = url.trim();
+  if (clean.includes('deliz-canteen.onrender.com/images/')) {
+    const match = clean.match(/([^/]+)\.(?:png|jpg|jpeg)$/i);
+    if (match) {
+      const name = match[1];
+      return `/images/${name}.jpg`;
+    }
+    return '/images/samosa.jpg';
+  }
+  return clean;
+}
+

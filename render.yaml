@@ -2,7 +2,6 @@ services:
   - type: web
     name: nesty-campus-canteen
     runtime: node
-    rootDir: web
     plan: free
     buildCommand: npm install && npm run build
     startCommand: npm start
@@ -19,3 +18,11 @@ services:
         value: rzp_test_NestyCampusKeyId
       - key: RAZORPAY_KEY_SECRET
         sync: false
+      - key: APP_URL
+        value: https://nesty-service-app.onrender.com
+      - key: BREVO_API_KEY
+        sync: false
+      - key: CAMPUS_EMAIL_SENDER
+        sync: false
+      - key: CAMPUS_EMAIL_SENDER_NAME
+        value: "NESTY Campus Canteen"

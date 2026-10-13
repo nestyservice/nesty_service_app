@@ -266,11 +266,11 @@ export const NestyQrScannerModal: React.FC<NestyQrScannerModalProps> = ({
                 </div>
                 <div className="grid grid-cols-3 gap-1.5">
                   <button
-                    onClick={() => onScanSubmitted('NESTY-COUNTER-CB')}
-                    data-testid="scan_preset_counter_button"
+                    onClick={() => onScanSubmitted('NST-8492')}
+                    data-testid="scan_preset_order_button"
                     className="py-2 px-2 rounded-lg border border-nesty-gold bg-nesty-cream text-nesty-burgundy font-bold text-[11px] hover:bg-nesty-goldLight"
                   >
-                    CB Counter
+                    Sample Order
                   </button>
                   <button
                     onClick={() => onScanSubmitted('COUPON:NESTY20')}
