@@ -4,7 +4,18 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'fs';
 import path from 'path';
-import { app, _testOtpStores, generatePickupToken } from './index.js';
+import { fileURLToPath } from 'url';
+import {
+  app,
+  _testOtpStores,
+  generatePickupToken,
+  validateProductionSecrets,
+  INSECURE_DEFAULT_JWT_SECRET,
+  INSECURE_DEFAULT_ADMIN_PASSWORD,
+} from './index.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function requestJson(server, method, path, body = null, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -46,11 +57,26 @@ test('NESTY Complete End-to-End System Verification Suite (Requirements 1-11)', 
   // Ensure test mode for mock email dispatcher
   process.env.NODE_ENV = 'test';
 
+  // 1. ISOLATE DATABASE FIXTURE: Ensure nesty_shared_db.json is 100% clean and untouched
+  const dataDir = path.join(__dirname, 'data');
+  const originalDbFile = path.join(dataDir, 'nesty_shared_db.json');
+  const isolatedDbFile = path.join(dataDir, `nesty_test_fixture_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.json`);
+
+  // Copy real db to isolated test fixture before any test runs
+  fs.copyFileSync(originalDbFile, isolatedDbFile);
+  process.env.DATABASE_FILE_PATH = path.relative(process.cwd(), isolatedDbFile);
+
   const server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 
   t.after(() => {
     server.close();
+    try {
+      if (fs.existsSync(isolatedDbFile)) {
+        fs.unlinkSync(isolatedDbFile);
+      }
+    } catch {}
+    delete process.env.DATABASE_FILE_PATH;
   });
 
   const uniqueSuffix = Date.now();
@@ -621,6 +647,370 @@ test('NESTY Complete End-to-End System Verification Suite (Requirements 1-11)', 
       const stats = fs.statSync(fullPath);
       assert.ok(stats.size > 1000, `Image ${imgName} size must be non-trivial (>1KB)`);
       assert.ok(stats.size < 200000, `Image ${imgName} must be optimized (<200KB for fast ~1s load)`);
+    }
+  });
+
+  // =========================================================================
+  // SECURITY TEST SUITES (SEC-T1 through SEC-T8)
+  // =========================================================================
+
+  await t.test('SEC-T1: Spoofed x-admin-email and x-admin-role headers without valid Bearer token are strictly rejected (403)', async () => {
+    const spoofAttempt = await requestJson(
+      server,
+      'POST',
+      '/api/admin/menu',
+      { name: 'Spoofed Admin Item', price: 99 },
+      { 'x-admin-email': 'admin@cvr.ac.in', 'x-admin-role': 'admin' }
+    );
+    assert.equal(spoofAttempt.status, 403, 'Unsigned x-admin-* headers must NOT grant admin access');
+    assert.equal(spoofAttempt.data.success, false);
+  });
+
+  await t.test('SEC-T2: Student token cannot access admin endpoints or view other student records', async () => {
+    const studentAdminAttempt = await requestJson(
+      server,
+      'GET',
+      '/api/admin/students',
+      null,
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(studentAdminAttempt.status, 403, 'Student token must be blocked from /api/admin/students');
+  });
+
+  await t.test('SEC-T3: IDOR prevention on GET /api/orders and GET /api/payments blocks unauthenticated and cross-student order snooping', async () => {
+    // 1. Unauthenticated request to /api/orders must return 401
+    const unauthOrders = await requestJson(server, 'GET', '/api/orders?email=admin@cvr.ac.in');
+    assert.equal(unauthOrders.status, 401, 'Unauthenticated order queries must return 401');
+
+    // 2. Unauthenticated request to /api/payments must return 401
+    const unauthPayments = await requestJson(server, 'GET', '/api/payments?email=admin@cvr.ac.in');
+    assert.equal(unauthPayments.status, 401, 'Unauthenticated payment queries must return 401');
+
+    // 3. Student requesting other student's email gets ONLY their own orders
+    const studentOrders = await requestJson(
+      server,
+      'GET',
+      '/api/orders?email=admin@cvr.ac.in',
+      null,
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(studentOrders.status, 200);
+    for (const ord of studentOrders.data.orders) {
+      assert.equal(ord.studentEmail.toLowerCase(), testStudentEmail.toLowerCase());
+    }
+
+    // 4. Student requesting other student's email gets ONLY their own payments
+    const studentPayments = await requestJson(
+      server,
+      'GET',
+      '/api/payments?email=admin@cvr.ac.in',
+      null,
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(studentPayments.status, 200);
+    for (const pmt of studentPayments.data.payments) {
+      assert.equal(pmt.studentEmail.toLowerCase(), testStudentEmail.toLowerCase());
+    }
+  });
+
+  await t.test('SEC-T4: Unauthorized password reset without OTP or credential is rejected (400)', async () => {
+    const unauthReset = await requestJson(server, 'POST', '/api/auth/reset-password', {
+      email: 'admin@cvr.ac.in',
+      newPassword: 'hackedPassword123',
+    });
+    assert.equal(unauthReset.status, 400, 'Password reset without OTP or current password must fail');
+    assert.equal(unauthReset.data.success, false);
+  });
+
+  await t.test('SEC-T5: Client-supplied price tampering (e.g. ₹1 for ₹25 puff) is overridden by authoritative catalog price', async () => {
+    const tamperedOrder = await requestJson(
+      server,
+      'POST',
+      '/api/orders',
+      {
+        studentEmail: testStudentEmail,
+        block: 'CB',
+        items: [{ id: 'veg_puff', name: 'Veg Puff', price: 1, quantity: 2, isVeg: true }],
+        totalAmount: 2, // Attacker forged total
+      },
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(tamperedOrder.status, 200);
+    // Server must enforce real catalog price: 2 * ₹25 = ₹50
+    assert.equal(tamperedOrder.data.order.items[0].price, 25, 'Catalog price must be 25');
+    assert.equal(tamperedOrder.data.order.totalAmount, 50, 'Authoritative subtotal must be 50');
+    assert.equal(tamperedOrder.data.order.finalAmount, 50, 'Final payable must be 50');
+  });
+
+  await t.test('SEC-T6: Student profile updates cannot tamper with role', async () => {
+    const roleTamper = await requestJson(
+      server,
+      'PUT',
+      '/api/auth/profile',
+      { name: 'Student Hacker', role: 'admin' },
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(roleTamper.status, 200);
+    assert.equal(roleTamper.data.user.role, 'student', 'Role must remain student');
+  });
+
+  await t.test('SEC-T7: Rate limiting protects auth endpoints against excessive brute-force attempts', async () => {
+    // Attempt rapid consecutive password reset requests to trigger rate limit (max 5)
+    let rateLimited = false;
+    for (let i = 0; i < 7; i++) {
+      const res = await requestJson(server, 'POST', '/api/auth/reset-password', {
+        email: `ratelimit_${uniqueSuffix}@cvr.ac.in`,
+        newPassword: 'short',
+      });
+      if (res.status === 429) {
+        rateLimited = true;
+        break;
+      }
+    }
+    assert.equal(rateLimited, true, 'Rate limiter should return 429 when threshold exceeded');
+  });
+
+  await t.test('SEC-T8: Payment verification rejects invalid or omitted HMAC signature, and confirms authentic signature', async () => {
+    // 1. Invalid signature must be rejected with 400
+    const fakeSignatureRes = await requestJson(
+      server,
+      'POST',
+      '/api/payments/verify',
+      {
+        razorpay_order_id: 'order_test_998877',
+        razorpay_payment_id: 'pay_test_112233',
+        razorpay_signature: 'invalid_forged_hmac_signature_00000000000000000000000000000000',
+        studentEmail: testStudentEmail,
+        items: [{ id: 'samosa', quantity: 1 }],
+      },
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(fakeSignatureRes.status, 400, 'Invalid signature must be rejected with 400');
+    assert.equal(fakeSignatureRes.data.success, false);
+
+    // 2. Omitted signature without isTestPayment must be rejected with 400
+    const omittedSigRes = await requestJson(
+      server,
+      'POST',
+      '/api/payments/verify',
+      {
+        razorpay_order_id: 'order_test_998877',
+        razorpay_payment_id: 'pay_test_445566',
+        studentEmail: testStudentEmail,
+        items: [{ id: 'samosa', quantity: 1 }],
+      },
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(omittedSigRes.status, 400, 'Omitted signature must be rejected with 400');
+    assert.equal(omittedSigRes.data.success, false);
+
+    // 3. Authentic HMAC-SHA256 signature must be verified successfully
+    const validOrderId = `order_live_${Date.now()}`;
+    const validPaymentId = `pay_live_${Date.now()}`;
+    const testSecret = process.env.RAZORPAY_KEY_SECRET || 'nesty_rzp_server_secret_key';
+    const validSig = crypto
+      .createHmac('sha256', testSecret)
+      .update(`${validOrderId}|${validPaymentId}`)
+      .digest('hex');
+
+    const validSigRes = await requestJson(
+      server,
+      'POST',
+      '/api/payments/verify',
+      {
+        razorpay_order_id: validOrderId,
+        razorpay_payment_id: validPaymentId,
+        razorpay_signature: validSig,
+        studentEmail: testStudentEmail,
+        items: [{ id: 'samosa', quantity: 2 }],
+      },
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(validSigRes.status, 200, 'Valid signature must succeed');
+    assert.equal(validSigRes.data.success, true);
+    assert.equal(validSigRes.data.order.paymentStatus, 'PAID');
+    assert.ok(validSigRes.data.order.pickupToken, 'Must generate valid pickup token');
+  });
+
+  // -------------------------------------------------------------------------
+  // SECTION: PRODUCTION SECRET VALIDATION TESTS (SEC-PROD-1 to SEC-PROD-9)
+  // -------------------------------------------------------------------------
+  await t.test('SEC-PROD-1: In production, missing or blank JWT_SECRET fails validation', () => {
+    const resMissing = validateProductionSecrets({
+      NODE_ENV: 'production',
+      JWT_SECRET: '',
+      ADMIN_DEFAULT_PASSWORD: 'StrongProductionAdminPassword2026!',
+    });
+    assert.equal(resMissing.valid, false);
+    assert.equal(resMissing.reason, 'INVALID_JWT_SECRET');
+    assert.ok(resMissing.message.includes('JWT_SECRET'));
+
+    const resWhitespace = validateProductionSecrets({
+      NODE_ENV: 'production',
+      JWT_SECRET: '   ',
+      ADMIN_DEFAULT_PASSWORD: 'StrongProductionAdminPassword2026!',
+    });
+    assert.equal(resWhitespace.valid, false);
+    assert.equal(resWhitespace.reason, 'INVALID_JWT_SECRET');
+
+    const resUndefined = validateProductionSecrets({
+      NODE_ENV: 'production',
+      ADMIN_DEFAULT_PASSWORD: 'StrongProductionAdminPassword2026!',
+    });
+    assert.equal(resUndefined.valid, false);
+    assert.equal(resUndefined.reason, 'INVALID_JWT_SECRET');
+  });
+
+  await t.test('SEC-PROD-2: In production, default or weak JWT_SECRET fails validation', () => {
+    const resDefault = validateProductionSecrets({
+      NODE_ENV: 'production',
+      JWT_SECRET: INSECURE_DEFAULT_JWT_SECRET,
+      ADMIN_DEFAULT_PASSWORD: 'StrongProductionAdminPassword2026!',
+    });
+    assert.equal(resDefault.valid, false);
+    assert.equal(resDefault.reason, 'INVALID_JWT_SECRET');
+
+    const resShort = validateProductionSecrets({
+      NODE_ENV: 'production',
+      JWT_SECRET: 'short_secret',
+      ADMIN_DEFAULT_PASSWORD: 'StrongProductionAdminPassword2026!',
+    });
+    assert.equal(resShort.valid, false);
+    assert.equal(resShort.reason, 'INVALID_JWT_SECRET');
+  });
+
+  await t.test('SEC-PROD-3: In production, missing or blank ADMIN_DEFAULT_PASSWORD fails validation', () => {
+    const resMissing = validateProductionSecrets({
+      NODE_ENV: 'production',
+      JWT_SECRET: 'StrongProductionSecretKeyForNesty2026!',
+      ADMIN_DEFAULT_PASSWORD: '',
+    });
+    assert.equal(resMissing.valid, false);
+    assert.equal(resMissing.reason, 'INVALID_ADMIN_DEFAULT_PASSWORD');
+    assert.ok(resMissing.message.includes('ADMIN_DEFAULT_PASSWORD'));
+
+    const resWhitespace = validateProductionSecrets({
+      NODE_ENV: 'production',
+      JWT_SECRET: 'StrongProductionSecretKeyForNesty2026!',
+      ADMIN_DEFAULT_PASSWORD: '   ',
+    });
+    assert.equal(resWhitespace.valid, false);
+    assert.equal(resWhitespace.reason, 'INVALID_ADMIN_DEFAULT_PASSWORD');
+
+    const resUndefined = validateProductionSecrets({
+      NODE_ENV: 'production',
+      JWT_SECRET: 'StrongProductionSecretKeyForNesty2026!',
+    });
+    assert.equal(resUndefined.valid, false);
+    assert.equal(resUndefined.reason, 'INVALID_ADMIN_DEFAULT_PASSWORD');
+  });
+
+  await t.test('SEC-PROD-4: In production, default admin123 ADMIN_DEFAULT_PASSWORD fails validation', () => {
+    const resDefault = validateProductionSecrets({
+      NODE_ENV: 'production',
+      JWT_SECRET: 'StrongProductionSecretKeyForNesty2026!',
+      ADMIN_DEFAULT_PASSWORD: 'admin123',
+    });
+    assert.equal(resDefault.valid, false);
+    assert.equal(resDefault.reason, 'INVALID_ADMIN_DEFAULT_PASSWORD');
+
+    const resInsecureConst = validateProductionSecrets({
+      NODE_ENV: 'production',
+      JWT_SECRET: 'StrongProductionSecretKeyForNesty2026!',
+      ADMIN_DEFAULT_PASSWORD: INSECURE_DEFAULT_ADMIN_PASSWORD,
+    });
+    assert.equal(resInsecureConst.valid, false);
+    assert.equal(resInsecureConst.reason, 'INVALID_ADMIN_DEFAULT_PASSWORD');
+  });
+
+  await t.test('SEC-PROD-5: In production, valid strong secrets pass validation without leaking values', () => {
+    const resValid = validateProductionSecrets({
+      NODE_ENV: 'production',
+      JWT_SECRET: 'StrongProductionSecretKeyForNesty2026!',
+      ADMIN_DEFAULT_PASSWORD: 'StrongProductionAdminPassword2026!',
+    });
+    assert.equal(resValid.valid, true);
+    assert.equal(resValid.reason, undefined);
+  });
+
+  await t.test('SEC-PROD-6: In development and test environments, missing secrets do not block execution', () => {
+    const resDev = validateProductionSecrets({
+      NODE_ENV: 'development',
+    });
+    assert.equal(resDev.valid, true);
+
+    const resTest = validateProductionSecrets({
+      NODE_ENV: 'test',
+    });
+    assert.equal(resTest.valid, true);
+  });
+
+  await t.test('SEC-PROD-7: Production server process terminates with exit code 1 when launched with insecure secrets', async () => {
+    const { spawn } = await import('node:child_process');
+    const serverScript = path.join(__dirname, 'index.js');
+
+    const child = spawn(process.execPath, [serverScript], {
+      env: {
+        ...process.env,
+        NODE_ENV: 'production',
+        JWT_SECRET: '',
+        ADMIN_DEFAULT_PASSWORD: 'StrongPassword123!',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stderr = '';
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    const exitCode = await new Promise((resolve) => {
+      child.on('close', resolve);
+    });
+
+    assert.equal(exitCode, 1, 'Process must exit with status 1 on insecure production secrets');
+    assert.ok(stderr.includes('FATAL CONFIGURATION ERROR'), 'Stderr must explain fatal error without secret leaks');
+  });
+
+  await t.test('SEC-PROD-8: In production mode, admin login strictly rejects default admin123 password', async () => {
+    const originalEnv = process.env.NODE_ENV;
+    const originalJwt = process.env.JWT_SECRET;
+    const originalPass = process.env.ADMIN_DEFAULT_PASSWORD;
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.JWT_SECRET = 'StrongUniqueProductionKey2026!';
+      process.env.ADMIN_DEFAULT_PASSWORD = 'StrongAdminPassword2026!';
+
+      const loginRes = await requestJson(server, 'POST', '/api/auth/login', {
+        identifier: 'admin@cvr.ac.in',
+        password: 'admin123',
+      });
+      assert.equal(loginRes.status, 401, 'admin123 must be rejected with 401 in production');
+      assert.equal(loginRes.data.success, false);
+      assert.ok(loginRes.data.message.includes('Insecure default admin password cannot be used in production'));
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+      if (originalJwt !== undefined) process.env.JWT_SECRET = originalJwt; else delete process.env.JWT_SECRET;
+      if (originalPass !== undefined) process.env.ADMIN_DEFAULT_PASSWORD = originalPass; else delete process.env.ADMIN_DEFAULT_PASSWORD;
+    }
+  });
+
+  await t.test('SEC-PROD-9: In production mode, runtime guard rejects requests with 503 if production secrets are invalid', async () => {
+    const prevEnv = process.env.NODE_ENV;
+    const prevJwt = process.env.JWT_SECRET;
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.JWT_SECRET = '';
+      const pingRes = await requestJson(server, 'GET', '/api/menu');
+      assert.equal(pingRes.status, 503, 'Must return 503 Service Unavailable when production secrets are misconfigured');
+      assert.equal(pingRes.data.error, 'SERVICE_UNAVAILABLE');
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+      if (prevJwt !== undefined) {
+        process.env.JWT_SECRET = prevJwt;
+      } else {
+        delete process.env.JWT_SECRET;
+      }
     }
   });
 });
