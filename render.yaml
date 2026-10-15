@@ -13,7 +13,7 @@ services:
       - key: ADMIN_EMAILS
         value: admin@cvr.ac.in
       - key: ADMIN_DEFAULT_PASSWORD
-        value: admin123
+        generateValue: true
       - key: RAZORPAY_KEY_ID
         value: rzp_test_NestyCampusKeyId
       - key: RAZORPAY_KEY_SECRET
