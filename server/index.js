@@ -14,15 +14,73 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3000);
-const JWT_SECRET = process.env.JWT_SECRET || 'nesty_server_hmac_secret_2026_cvr_canteen';
+export const isProduction = () => process.env.NODE_ENV === 'production';
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+export const INSECURE_DEFAULT_JWT_SECRET = 'nesty_server_hmac_secret_2026_cvr_canteen';
+export const INSECURE_DEFAULT_ADMIN_PASSWORD = 'admin123';
+
+// Strict production configuration validation: fail closed immediately in production
+export function validateProductionSecrets(env = process.env) {
+  const isProd = env.NODE_ENV === 'production';
+  if (!isProd) {
+    return { valid: true };
+  }
+
+  const jwtSecret = (env.JWT_SECRET || '').trim();
+  if (!jwtSecret || jwtSecret === INSECURE_DEFAULT_JWT_SECRET || jwtSecret.length < 16) {
+    const errorMsg = 'FATAL CONFIGURATION ERROR: A strong, unique JWT_SECRET environment variable (minimum 16 characters) is strictly required in production.';
+    return { valid: false, reason: 'INVALID_JWT_SECRET', message: errorMsg };
+  }
+
+  const adminDefaultPass = (env.ADMIN_DEFAULT_PASSWORD || '').trim();
+  if (!adminDefaultPass || adminDefaultPass === INSECURE_DEFAULT_ADMIN_PASSWORD || adminDefaultPass.length < 8) {
+    const errorMsg = 'FATAL CONFIGURATION ERROR: ADMIN_DEFAULT_PASSWORD cannot be missing, blank, shorter than 8 characters, or "admin123" in production.';
+    return { valid: false, reason: 'INVALID_ADMIN_DEFAULT_PASSWORD', message: errorMsg };
+  }
+
+  return { valid: true };
+}
+
+// Top-level startup check: In production, terminate process immediately if secrets are invalid
+const secretValidation = validateProductionSecrets(process.env);
+if (process.env.NODE_ENV === 'production' && !secretValidation.valid) {
+  console.error(`[SECURITY FATAL] ${secretValidation.message}`);
+  process.exit(1);
+}
+
+export function getJwtSecret() {
+  const isProd = process.env.NODE_ENV === 'production';
+  const envSecret = (process.env.JWT_SECRET || '').trim();
+  if (isProd) {
+    if (!envSecret || envSecret === INSECURE_DEFAULT_JWT_SECRET || envSecret.length < 16) {
+      return '';
+    }
+    return envSecret;
+  }
+  return envSecret || INSECURE_DEFAULT_JWT_SECRET;
+}
+
+export function getAdminDefaultPassword() {
+  const isProd = process.env.NODE_ENV === 'production';
+  const envPass = (process.env.ADMIN_DEFAULT_PASSWORD || '').trim();
+  if (isProd) {
+    if (!envPass || envPass === INSECURE_DEFAULT_ADMIN_PASSWORD || envPass.length < 8) {
+      return '';
+    }
+    return envPass;
+  }
+  return envPass || INSECURE_DEFAULT_ADMIN_PASSWORD;
+}
+
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'admin@cvr.ac.in')
   .split(',')
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);
-const ADMIN_DEFAULT_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || 'admin123';
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || 'rzp_test_NestyCampusKeyId';
+
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || (IS_PROD ? '' : 'rzp_test_NestyCampusKeyId');
 // Note: RAZORPAY_KEY_SECRET is strictly kept on the server and never sent to clients!
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'nesty_rzp_server_secret_key';
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || (IS_PROD ? '' : 'nesty_rzp_server_secret_key');
 const APP_URL = process.env.APP_URL || 'https://nesty-service-app.onrender.com';
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -48,28 +106,76 @@ if (!fs.existsSync(path.dirname(DB_FILE))) {
   fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
 }
 
-// Password hashing helper (SHA-256 salted or direct fallback for seeded demo accounts)
-function hashPassword(password) {
-  return crypto.createHash('sha256').update(`nesty_salt_${password}`).digest('hex');
+// Secure Password hashing helper using Node native scrypt
+// Maintains full backward compatibility with legacy salted SHA-256 and demo seed passwords
+export function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `scrypt:${salt}:${derived}`;
 }
 
-function verifyPassword(plainPassword, storedHash) {
+export function verifyPassword(plainPassword, storedHash) {
   if (!plainPassword || !storedHash) return false;
   const raw = plainPassword.toString();
   const trimmed = raw.trim();
 
-  // 1. Direct plain match (legacy seeds)
-  if (storedHash === raw || storedHash === trimmed) return true;
+  // 1. Scrypt format (scrypt:salt:derived)
+  if (storedHash.startsWith('scrypt:')) {
+    const [, salt, originalDerived] = storedHash.split(':');
+    if (!salt || !originalDerived) return false;
+    try {
+      const derived = crypto.scryptSync(raw, salt, 64).toString('hex');
+      const derivedTrimmed = crypto.scryptSync(trimmed, salt, 64).toString('hex');
+      const origBuf = Buffer.from(originalDerived, 'hex');
+      const derivedBuf = Buffer.from(derived, 'hex');
+      const derivedTrimmedBuf = Buffer.from(derivedTrimmed, 'hex');
+      if (derivedBuf.length === origBuf.length && crypto.timingSafeEqual(derivedBuf, origBuf)) return true;
+      if (derivedTrimmedBuf.length === origBuf.length && crypto.timingSafeEqual(derivedTrimmedBuf, origBuf)) return true;
+    } catch {
+      return false;
+    }
+  }
 
-  // 2. Salted sha256 (standard NESTY hash)
-  if (storedHash === hashPassword(raw) || storedHash === hashPassword(trimmed)) return true;
+  // 2. Salted sha256 (standard legacy NESTY hash: 'nesty_salt_' + password)
+  const legacySaltedRaw = crypto.createHash('sha256').update(`nesty_salt_${raw}`).digest('hex');
+  const legacySaltedTrimmed = crypto.createHash('sha256').update(`nesty_salt_${trimmed}`).digest('hex');
+  if (storedHash === legacySaltedRaw || storedHash === legacySaltedTrimmed) return true;
 
   // 3. Unsalted sha256 (fallback for external or earlier registrations)
-  const unsalted = crypto.createHash('sha256').update(raw).digest('hex');
+  const unsaltedRaw = crypto.createHash('sha256').update(raw).digest('hex');
   const unsaltedTrimmed = crypto.createHash('sha256').update(trimmed).digest('hex');
-  if (storedHash === unsalted || storedHash === unsaltedTrimmed) return true;
+  if (storedHash === unsaltedRaw || storedHash === unsaltedTrimmed) return true;
+
+  // 4. Direct plain match (legacy seeds e.g. 'admin123', 'student123')
+  if (storedHash === raw || storedHash === trimmed) return true;
 
   return false;
+}
+
+// In-Memory Sliding-Window Rate Limiting
+const rateLimitBuckets = new Map();
+
+export function checkRateLimit(key, maxRequests = 15, windowMs = 15 * 60 * 1000) {
+  const now = Date.now();
+  let bucket = rateLimitBuckets.get(key);
+  if (!bucket || now - bucket.startTime > windowMs) {
+    bucket = { startTime: now, count: 1 };
+    rateLimitBuckets.set(key, bucket);
+    return true;
+  }
+  if (bucket.count >= maxRequests) {
+    return false;
+  }
+  bucket.count += 1;
+  return true;
+}
+
+export function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) {
+    return forwarded.toString().split(',')[0].trim();
+  }
+  return req.socket?.remoteAddress || '127.0.0.1';
 }
 
 // Signed Server Session Token (HMAC-SHA256)
@@ -82,20 +188,34 @@ export function createAuthToken(user) {
   };
   const base64Payload = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = crypto
-    .createHmac('sha256', JWT_SECRET)
+    .createHmac('sha256', getJwtSecret() || 'UNCONFIGURED_SECRET')
     .update(base64Payload)
     .digest('base64url');
   return `${base64Payload}.${signature}`;
 }
 
 export function verifyAuthToken(token) {
+  const secret = getJwtSecret();
+  if (!secret) return null;
   if (!token || typeof token !== 'string' || !token.includes('.')) return null;
-  const [base64Payload, signature] = token.split('.');
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [base64Payload, signature] = parts;
   const expectedSig = crypto
-    .createHmac('sha256', JWT_SECRET)
+    .createHmac('sha256', secret)
     .update(base64Payload)
     .digest('base64url');
-  if (signature !== expectedSig) return null;
+
+  try {
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expectedSig);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
   try {
     const payload = JSON.parse(Buffer.from(base64Payload, 'base64url').toString('utf-8'));
     if (payload.exp && Date.now() > payload.exp) return null;
@@ -216,7 +336,9 @@ const INITIAL_SEED_DATA = {
       rollNo: 'ADMIN-01',
       role: 'admin',
       emailVerified: true,
-      passwordHash: hashPassword(ADMIN_DEFAULT_PASSWORD),
+      passwordHash: (process.env.NODE_ENV === 'production' && (!getAdminDefaultPassword() || getAdminDefaultPassword() === 'admin123'))
+        ? 'PROD_UNCONFIGURED_ADMIN_PASSWORD_LOCKED'
+        : hashPassword(getAdminDefaultPassword() || INSECURE_DEFAULT_ADMIN_PASSWORD),
       createdAt: '2026-09-01T08:00:00Z',
     },
     {
@@ -377,9 +499,10 @@ const INITIAL_SEED_DATA = {
 };
 
 function loadDb() {
+  const dbFile = resolveDbFilePath();
   try {
-    if (fs.existsSync(DB_FILE)) {
-      const raw = fs.readFileSync(DB_FILE, 'utf-8');
+    if (fs.existsSync(dbFile)) {
+      const raw = fs.readFileSync(dbFile, 'utf-8');
       const parsed = JSON.parse(raw);
       return {
         menuItems: parsed.menuItems || INITIAL_SEED_DATA.menuItems,
@@ -399,10 +522,27 @@ function loadDb() {
 }
 
 function saveDb(db) {
+  const dbFile = resolveDbFilePath();
+  const dir = path.dirname(dbFile);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const tmpFile = path.join(
+    dir,
+    `.nesty_tmp_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.json`
+  );
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+    fs.writeFileSync(tmpFile, JSON.stringify(db, null, 2), 'utf-8');
+    fs.renameSync(tmpFile, dbFile);
   } catch (err) {
-    console.error('Failed to write DB file:', err);
+    try {
+      if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+    } catch {}
+    try {
+      fs.writeFileSync(dbFile, JSON.stringify(db, null, 2), 'utf-8');
+    } catch (fallbackErr) {
+      console.error('Failed to write DB file:', fallbackErr);
+    }
   }
 }
 
@@ -412,36 +552,29 @@ function sanitizeUser(u) {
   return safe;
 }
 
-// Resolve authenticated actor from Bearer token OR verified headers
-function resolveActor(req, db) {
+// Resolve authenticated actor strictly from verified Bearer token!
+// Identity headers (x-admin-role, x-admin-email, x-user-email) are NEVER trusted for authorization.
+export function resolveActor(req, db) {
   const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice(7).trim();
-    const decoded = verifyAuthToken(token);
-    if (decoded && decoded.email) {
-      const emailLower = decoded.email.toLowerCase();
-      const dbUser = db.users.find((u) => u.email.toLowerCase() === emailLower);
-      if (dbUser) return dbUser;
-      if (ADMIN_EMAILS.includes(emailLower) || decoded.role === 'admin') {
-        return { email: emailLower, role: 'admin', name: 'Nesty Canteen Admin' };
-      }
-    }
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
   }
 
-  const headerEmail = (req.headers['x-admin-email'] || req.headers['x-user-email'] || '')
-    .toString()
-    .trim()
-    .toLowerCase();
-  if (headerEmail) {
-    const dbUser = db.users.find((u) => u.email.toLowerCase() === headerEmail);
-    if (dbUser) return dbUser;
-    if (ADMIN_EMAILS.includes(headerEmail)) {
-      return { email: headerEmail, role: 'admin', name: 'Nesty Canteen Admin' };
-    }
+  const token = authHeader.slice(7).trim();
+  const decoded = verifyAuthToken(token);
+  if (!decoded || !decoded.email) {
+    return null;
   }
 
-  if (req.headers['x-admin-role'] === 'admin') {
-    return { email: headerEmail || 'admin@cvr.ac.in', role: 'admin', name: 'Nesty Canteen Admin' };
+  const emailLower = decoded.email.toLowerCase();
+  const dbUser = db.users.find((u) => u.email.toLowerCase() === emailLower);
+  if (dbUser) {
+    return dbUser;
+  }
+
+  // If token is verified for an admin email configured in environment
+  if (ADMIN_EMAILS.includes(emailLower) || decoded.role === 'admin') {
+    return { email: emailLower, role: 'admin', name: 'Nesty Canteen Admin' };
   }
 
   return null;
@@ -460,8 +593,62 @@ function requireAdmin(req, res, db) {
 }
 
 export const app = express();
-app.use(cors());
-app.use(express.json({ limit: '5mb' }));
+
+// Fail-safe production runtime guard: abort requests immediately if secrets are misconfigured
+app.use((_req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    const val = validateProductionSecrets(process.env);
+    if (!val.valid) {
+      return res.status(503).json({
+        success: false,
+        error: 'SERVICE_UNAVAILABLE',
+        message: 'Server misconfiguration: Production secrets must be properly configured.',
+      });
+    }
+  }
+  next();
+});
+
+// HTTP Security Headers
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://checkout.razorpay.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; frame-src https://api.razorpay.com https://checkout.razorpay.com; connect-src 'self' https://api.razorpay.com https://lumberjack.razorpay.com;"
+  );
+  if (IS_PROD) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
+// Restrict CORS origins in production, permit dev in local
+const allowedOrigins = [
+  APP_URL,
+  'https://nesty-service-app.onrender.com',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173',
+].filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (!IS_PROD || allowedOrigins.includes(origin) || origin.endsWith('.onrender.com')) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
+    credentials: true,
+  })
+);
+
+app.use(express.json({ limit: '2mb' }));
 
 // Health & Public Config Endpoint (Never exposes secret keys!)
 app.get('/api/health', (_req, res) => {
@@ -489,6 +676,14 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Please enter your email/roll number and password.' });
   }
 
+  const clientIp = getClientIp(req);
+  if (!checkRateLimit(`login:${clientIp}:${identifierLower}`, 25, 15 * 60 * 1000)) {
+    return res.status(429).json({
+      success: false,
+      message: 'Too many login attempts. Please wait 15 minutes before trying again.',
+    });
+  }
+
   // Block vendor login
   if (identifierLower.startsWith('vendor')) {
     return res.status(403).json({
@@ -507,8 +702,13 @@ app.post('/api/auth/login', async (req, res) => {
       (cleanDigits.length >= 10 && u.phone && u.phone.replace(/\D/g, '') === cleanDigits)
   );
 
-  // Auto-seed admin user if configured in env
-  if (!user && ADMIN_EMAILS.includes(identifierLower) && password.trim() === ADMIN_DEFAULT_PASSWORD) {
+  // Auto-seed admin user if legitimately configured in env (strictly forbidding admin123 in production)
+  const currentAdminPass = getAdminDefaultPassword();
+  const isEligibleAdminSeed = process.env.NODE_ENV === 'production'
+    ? Boolean(currentAdminPass && currentAdminPass !== INSECURE_DEFAULT_ADMIN_PASSWORD && currentAdminPass !== 'admin123')
+    : Boolean(currentAdminPass);
+
+  if (!user && ADMIN_EMAILS.includes(identifierLower) && isEligibleAdminSeed && password.trim() === currentAdminPass) {
     user = {
       email: identifierLower,
       id: 'usr_admin_cvr',
@@ -550,8 +750,29 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(403).json({ success: false, message: 'Vendor login is disabled in Nesty.' });
   }
 
+  // In production, strictly reject default admin password for admin accounts
+  if (user.role.toLowerCase() === 'admin' && process.env.NODE_ENV === 'production') {
+    if (password.trim() === 'admin123' || password.trim() === INSECURE_DEFAULT_ADMIN_PASSWORD) {
+      return res.status(401).json({
+        success: false,
+        message: 'Insecure default admin password cannot be used in production.',
+      });
+    }
+  }
+
   // Strictly verify password - NEVER bypass!
-  if (!verifyPassword(password, user.passwordHash)) {
+  let passwordMatches = verifyPassword(password, user.passwordHash);
+
+  // In production or development: if user is admin and logging in with newly configured ADMIN_DEFAULT_PASSWORD, allow and upgrade hash
+  if (!passwordMatches && user.role.toLowerCase() === 'admin' && currentAdminPass && password.trim() === currentAdminPass) {
+    if (process.env.NODE_ENV !== 'production' || (currentAdminPass !== INSECURE_DEFAULT_ADMIN_PASSWORD && currentAdminPass !== 'admin123')) {
+      passwordMatches = true;
+      user.passwordHash = hashPassword(currentAdminPass);
+      saveDb(db);
+    }
+  }
+
+  if (!passwordMatches) {
     return res.status(401).json({ success: false, message: 'Invalid credentials. Incorrect password entered.' });
   }
 
@@ -651,6 +872,14 @@ app.post('/api/auth/restore-verified-account', (req, res) => {
 // 2. STUDENT REGISTRATION & EMAIL VERIFICATION OTP (Requirement #1 & #3)
 // ============================================================================
 app.post('/api/auth/register-student', async (req, res) => {
+  const clientIp = getClientIp(req);
+  if (!checkRateLimit(`reg:${clientIp}`, 15, 15 * 60 * 1000)) {
+    return res.status(429).json({
+      success: false,
+      message: 'Too many registration requests from this network. Please wait.',
+    });
+  }
+
   const db = loadDb();
   const email = (req.body?.email || '').toString().trim().toLowerCase();
   const password = (req.body?.password || '').toString();
@@ -864,15 +1093,27 @@ app.put('/api/auth/profile', (req, res) => {
     return res.status(401).json({ success: false, message: 'Authentication required.' });
   }
 
+  const user = db.users.find((u) => u.email.toLowerCase() === actor.email.toLowerCase()) || actor;
+
+  // Prevent role tampering, coin inflation, email modification, or unverified password changes
   const { name, phone, rollNo } = req.body || {};
-  if (name && name.trim()) actor.name = name.trim();
-  if (typeof phone === 'string') actor.phone = phone.trim();
-  if (typeof rollNo === 'string') actor.rollNo = rollNo.trim().toUpperCase();
+  if (name && typeof name === 'string' && name.trim()) {
+    user.name = name.trim().slice(0, 80);
+    actor.name = user.name;
+  }
+  if (typeof phone === 'string') {
+    user.phone = phone.trim().slice(0, 20);
+    actor.phone = user.phone;
+  }
+  if (typeof rollNo === 'string') {
+    user.rollNo = rollNo.trim().toUpperCase().slice(0, 20);
+    actor.rollNo = user.rollNo;
+  }
 
   saveDb(db);
   return res.json({
     success: true,
-    user: sanitizeUser(actor),
+    user: sanitizeUser(user),
     message: 'Profile updated successfully!',
   });
 });
@@ -987,6 +1228,68 @@ app.post('/api/auth/forgot-password/verify-reset', (req, res) => {
   return res.json({
     success: true,
     message: 'Password updated successfully! You can now sign in with your new password.',
+  });
+});
+
+// Secure Password Reset Handler (Supports OTP or Current Password Verification)
+app.post('/api/auth/reset-password', (req, res) => {
+  const clientIp = getClientIp(req);
+  const email = (req.body?.email || '').toString().trim().toLowerCase();
+  const newPassword = (req.body?.newPassword || '').toString();
+  const otp = (req.body?.otp || '').toString().trim();
+  const currentPassword = (req.body?.currentPassword || '').toString();
+
+  if (!checkRateLimit(`reset:${clientIp}:${email}`, 5, 15 * 60 * 1000)) {
+    return res.status(429).json({ success: false, message: 'Too many reset attempts. Please wait 15 minutes.' });
+  }
+
+  if (newPassword.length < 6) {
+    return res.status(400).json({ success: false, message: 'New password must be at least 6 characters.' });
+  }
+
+  const db = loadDb();
+  const user = db.users.find((u) => u.email.toLowerCase() === email);
+
+  // Verification method: either valid OTP OR current password
+  let isAuthorized = false;
+
+  if (currentPassword && user && verifyPassword(currentPassword, user.passwordHash)) {
+    isAuthorized = true;
+  } else if (otp) {
+    const record = passwordResetOtps.get(email);
+    if (record) {
+      if (Date.now() > record.expiresAt) {
+        passwordResetOtps.delete(email);
+        return res.status(400).json({ success: false, message: 'Verification OTP has expired. Please request a new one.' });
+      }
+      record.attempts += 1;
+      if (record.attempts > 5) {
+        passwordResetOtps.delete(email);
+        return res.status(429).json({ success: false, message: 'Too many invalid OTP attempts.' });
+      }
+      const submittedHash = crypto.createHash('sha256').update(otp).digest('hex');
+      if (submittedHash === record.otpHash) {
+        isAuthorized = true;
+        passwordResetOtps.delete(email);
+      }
+    } else if (otp === '482910' && user && process.env.NODE_ENV !== 'production') {
+      // Default demo campus verification code support in dev/test only
+      isAuthorized = true;
+    }
+  }
+
+  if (!user || !isAuthorized) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid verification OTP or credentials. Password reset denied.',
+    });
+  }
+
+  user.passwordHash = hashPassword(newPassword);
+  saveDb(db);
+  return res.json({
+    success: true,
+    message: 'Password reset successful. You can now log in with your new password.',
   });
 });
 
@@ -1423,14 +1726,42 @@ app.post('/api/payments/verify', (req, res) => {
     });
   }
 
-  // Server-Side Signature Verification
-  if (!isTestPayment && razorpay_order_id && razorpay_signature) {
+  // Production security: reject test payment flag and require authentic signature
+  if (IS_PROD && isTestPayment) {
+    return res.status(403).json({
+      success: false,
+      message: 'Test payment mode is strictly disabled in production environment.',
+    });
+  }
+
+  // Real payment signature verification: required unless explicitly in development test mode
+  const isDevTestMode = !IS_PROD && isTestPayment === true;
+
+  if (!isDevTestMode) {
+    if (!razorpay_order_id || !razorpay_signature) {
+      return res.status(400).json({
+        success: false,
+        message: 'Razorpay order ID and payment signature are strictly required.',
+      });
+    }
+
     const expectedSig = crypto
       .createHmac('sha256', RAZORPAY_KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
-    if (expectedSig !== razorpay_signature) {
+    let isValid = false;
+    try {
+      const expBuf = Buffer.from(expectedSig);
+      const sigBuf = Buffer.from(razorpay_signature);
+      if (expBuf.length === sigBuf.length && crypto.timingSafeEqual(expBuf, sigBuf)) {
+        isValid = true;
+      }
+    } catch {
+      isValid = false;
+    }
+
+    if (!isValid) {
       return res.status(400).json({
         success: false,
         message: 'Razorpay payment signature verification failed. Order cannot be marked as PAID.',
@@ -1443,7 +1774,7 @@ app.post('/api/payments/verify', (req, res) => {
   const verifiedItems = items.map((it) => {
     const product = db.menuItems.find((m) => m.id === it.id);
     const unitPrice = product ? product.price : Number(it.price || 0);
-    const qty = Math.max(1, Number(it.quantity || 1));
+    const qty = Math.max(1, Math.min(50, Math.floor(Number(it.quantity || 1))));
     authoritativeSubtotal += unitPrice * qty;
     return {
       id: it.id,
@@ -1519,7 +1850,7 @@ app.post('/api/payments/verify', (req, res) => {
   });
 });
 
-// Fallback order placement endpoint (Used for test payments or verified gateways)
+// Fallback order placement endpoint with authoritative server-side calculation
 app.post('/api/orders', (req, res) => {
   const db = loadDb();
   const actor = resolveActor(req, db);
@@ -1527,28 +1858,81 @@ app.post('/api/orders', (req, res) => {
     studentEmail,
     studentName,
     studentPhone,
+    block,
     items,
-    totalAmount,
+    couponCode,
     discount,
+    coinsRedeemed,
     paymentMethod,
     transactionId,
     razorpayOrderId,
   } = req.body || {};
 
   const email = (actor?.email || studentEmail || '').toString().trim().toLowerCase();
-  if (!email) {
-    return res.status(400).json({ success: false, message: 'Student email is required.' });
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ success: false, message: 'Valid student email is required.' });
   }
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ success: false, message: 'Cannot place an empty order.' });
   }
 
-  const sub = Number(totalAmount) || items.reduce((acc, it) => acc + Number(it.price) * Number(it.quantity), 0);
-  const disc = Math.max(0, Number(discount || 0));
-  const finalAmount = Math.max(1, sub - disc);
+  // Authoritative server-side calculation: Look up catalog prices in db.menuItems
+  let authoritativeSubtotal = 0;
+  const verifiedItems = [];
+
+  for (const it of items) {
+    const catalogItem = db.menuItems.find((m) => m.id === it.id);
+    if (!catalogItem) {
+      return res.status(400).json({ success: false, message: `Invalid item "${it.name || it.id}" in order.` });
+    }
+    const qty = Math.max(1, Math.min(50, Math.floor(Number(it.quantity) || 1)));
+    authoritativeSubtotal += catalogItem.price * qty;
+    verifiedItems.push({
+      id: catalogItem.id,
+      name: catalogItem.name,
+      price: catalogItem.price, // Server price ONLY
+      quantity: qty,
+      isVeg: catalogItem.isVeg,
+    });
+  }
+
+  // Authoritative Coupon Validation
+  let validatedDiscount = 0;
+  const cleanCouponCode = (couponCode || '').toString().trim().toUpperCase();
+  if (cleanCouponCode) {
+    const coupon = (db.coupons || []).find((c) => c.code.toUpperCase() === cleanCouponCode);
+    if (coupon && authoritativeSubtotal >= coupon.minOrderAmount) {
+      validatedDiscount = Math.min(
+        Math.floor((authoritativeSubtotal * coupon.discountPercent) / 100),
+        coupon.maxDiscount
+      );
+      coupon.usageCount = (coupon.usageCount || 0) + 1;
+    }
+  } else if (discount) {
+    // If client supplied direct discount without code, verify if any active coupon matches that discount
+    const discNum = Math.max(0, Number(discount));
+    const matchingCoupon = (db.coupons || []).find(
+      (c) =>
+        authoritativeSubtotal >= c.minOrderAmount &&
+        Math.min(Math.floor((authoritativeSubtotal * c.discountPercent) / 100), c.maxDiscount) === discNum
+    );
+    if (matchingCoupon) {
+      validatedDiscount = discNum;
+    }
+  }
+
+  // Authoritative Coin Validation: Clamped against authentic user coin balance
+  const userObj = db.users.find((u) => u.email.toLowerCase() === email);
+  const availableCoins = userObj?.coins || 0;
+  const maxRedeemableCoins = Math.min(20, Math.max(0, authoritativeSubtotal - validatedDiscount - 1));
+  const requestedCoins = Math.max(0, Math.floor(Number(coinsRedeemed) || 0));
+  const finalCoinsRedeemed = Math.min(requestedCoins, availableCoins, maxRedeemableCoins);
+
+  const finalAmount = Math.max(1, authoritativeSubtotal - validatedDiscount - finalCoinsRedeemed);
+  const coinsEarned = Math.max(1, Math.floor(finalAmount / 10));
 
   const orderId = `NST-${1000 + Math.floor(Math.random() * 9000)}`;
-  const cleanTxn = (transactionId || '').toString().trim() || `TXN-RZP-${Date.now()}`;
+  const cleanTxn = (transactionId || '').toString().trim() || `TXN-ORD-${Date.now()}`;
 
   // Check for duplicate callback
   const duplicate = db.orders.find((o) => o.transactionId === cleanTxn);
@@ -1577,13 +1961,16 @@ app.post('/api/orders', (req, res) => {
   const newOrder = {
     id: orderId,
     studentEmail: email,
-    studentName: (actor?.name || studentName || email.split('@')[0]).toString(),
-    studentPhone: (actor?.phone || studentPhone || '').toString(),
-    items,
-    totalAmount: sub,
-    discount: disc,
+    studentName: (actor?.name || userObj?.name || studentName || email.split('@')[0]).toString().slice(0, 80),
+    studentPhone: (actor?.phone || userObj?.phone || studentPhone || '').toString().slice(0, 20),
+    block: ['CB', 'CM', 'FB', 'PG'].includes(block) ? block : 'CB',
+    items: verifiedItems,
+    totalAmount: authoritativeSubtotal,
+    discount: validatedDiscount,
     finalAmount,
-    paymentMethod: (paymentMethod || 'Razorpay UPI').toString(),
+    coinsEarned,
+    coinsRedeemed: finalCoinsRedeemed,
+    paymentMethod: (paymentMethod || 'Razorpay Online Gateway').toString(),
     transactionId: cleanTxn,
     razorpayOrderId: razorpayOrderId || null,
     paymentStatus: 'PAID',
@@ -1610,6 +1997,12 @@ app.post('/api/orders', (req, res) => {
 
   db.orders.unshift(newOrder);
   db.payments.unshift(newPayment);
+
+  // Update student's coin balance
+  if (userObj) {
+    userObj.coins = Math.max(0, (userObj.coins || 0) - finalCoinsRedeemed + coinsEarned);
+  }
+
   saveDb(db);
 
   return res.json({
@@ -1617,7 +2010,7 @@ app.post('/api/orders', (req, res) => {
     order: newOrder,
     payment: newPayment,
     pickupToken: newOrder.pickupToken,
-    message: `Order #${newOrder.id} confirmed! Pickup Token: ${newOrder.pickupToken}. Transaction ID: ${newOrder.transactionId}`,
+    message: `Order #${newOrder.id} placed! Pickup Token: ${newOrder.pickupToken}. Transaction ID: ${newOrder.transactionId}`,
   });
 });
 
@@ -1670,18 +2063,28 @@ app.post('/api/payment-failed', (req, res) => {
   return res.json({ success: true, order: failedOrder, payment: failedPayment });
 });
 
-// Payment History Endpoint (Requirement #5)
+// Payment History Endpoint (IDOR Protected)
 app.get('/api/payments', (req, res) => {
   const db = loadDb();
   const actor = resolveActor(req, db);
-  const emailFilter = (req.query.email || '').toString().trim().toLowerCase();
 
-  if (actor && actor.role.toLowerCase() === 'admin' && !emailFilter) {
+  // Require authentication to access payments
+  if (!actor) {
+    return res.status(401).json({ success: false, message: 'Authentication required to view payments.' });
+  }
+
+  // Admins can view all payments or filter by student email
+  if (actor.role.toLowerCase() === 'admin') {
+    const emailFilter = (req.query.email || '').toString().trim().toLowerCase();
+    if (emailFilter) {
+      const payments = (db.payments || []).filter((p) => p.studentEmail.toLowerCase() === emailFilter);
+      return res.json({ success: true, payments });
+    }
     return res.json({ success: true, payments: db.payments || [] });
   }
 
-  const targetEmail = emailFilter || actor?.email?.toLowerCase() || '';
-  const payments = (db.payments || []).filter((p) => p.studentEmail.toLowerCase() === targetEmail);
+  // Students can ONLY view their own payments (IDOR prevention)
+  const payments = (db.payments || []).filter((p) => p.studentEmail.toLowerCase() === actor.email.toLowerCase());
   return res.json({ success: true, payments });
 });
 
@@ -1692,14 +2095,24 @@ app.get('/api/payments', (req, res) => {
 app.get('/api/orders', (req, res) => {
   const db = loadDb();
   const actor = resolveActor(req, db);
-  const emailFilter = (req.query.email || '').toString().trim().toLowerCase();
 
-  if (actor && actor.role.toLowerCase() === 'admin' && !emailFilter) {
+  // Require authentication to access orders
+  if (!actor) {
+    return res.status(401).json({ success: false, message: 'Authentication required to view orders.' });
+  }
+
+  // Admins can view all orders or filter by student email
+  if (actor.role.toLowerCase() === 'admin') {
+    const emailFilter = (req.query.email || '').toString().trim().toLowerCase();
+    if (emailFilter) {
+      const orders = db.orders.filter((o) => o.studentEmail.toLowerCase() === emailFilter);
+      return res.json({ success: true, orders });
+    }
     return res.json({ success: true, orders: db.orders });
   }
 
-  const targetEmail = emailFilter || actor?.email?.toLowerCase() || '';
-  const orders = db.orders.filter((o) => o.studentEmail.toLowerCase() === targetEmail);
+  // Students can ONLY view their own orders (IDOR prevention)
+  const orders = db.orders.filter((o) => o.studentEmail.toLowerCase() === actor.email.toLowerCase());
   return res.json({ success: true, orders });
 });
 
@@ -2375,6 +2788,11 @@ if (fs.existsSync(distPath)) {
 
 // Start server if executed directly
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
+  const startupCheck = validateProductionSecrets(process.env);
+  if (process.env.NODE_ENV === 'production' && !startupCheck.valid) {
+    console.error(`[SECURITY FATAL] Cannot start server in production: ${startupCheck.message}`);
+    process.exit(1);
+  }
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Nesty Web & Shared API Server listening on http://0.0.0.0:${PORT}`);
   });
