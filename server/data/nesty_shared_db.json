@@ -213,6 +213,50 @@
       "emailVerified": true,
       "passwordHash": "bdc5fbf2ec071c638c21bbe78e8c067894072b8a6bc6a6751b08540476f0f780",
       "createdAt": "2026-10-13T17:25:20.857Z"
+    },
+    {
+      "email": "test_student_1791986388573@cvr.ac.in",
+      "id": "usr_903968a9",
+      "name": "Test Student",
+      "phone": "9848012345",
+      "rollNo": "24B81A7017",
+      "role": "student",
+      "emailVerified": true,
+      "passwordHash": "8f349c200317636703e9eb6551054fac31b6c98dd7c8f98d8adbb1e1dd599af1",
+      "createdAt": "2026-10-14T13:59:48.609Z"
+    },
+    {
+      "email": "restore_student_1791986388662@cvr.ac.in",
+      "id": "usr_c63b782b",
+      "name": "Restored Student",
+      "phone": "9848088662",
+      "rollNo": "24B81A8662",
+      "role": "student",
+      "emailVerified": true,
+      "passwordHash": "bdc5fbf2ec071c638c21bbe78e8c067894072b8a6bc6a6751b08540476f0f780",
+      "createdAt": "2026-10-14T13:59:48.664Z"
+    },
+    {
+      "email": "test_student_1791987098253@cvr.ac.in",
+      "id": "usr_1ee23857",
+      "name": "Test Student",
+      "phone": "9848012345",
+      "rollNo": "24B81A5614",
+      "role": "student",
+      "emailVerified": true,
+      "passwordHash": "8f349c200317636703e9eb6551054fac31b6c98dd7c8f98d8adbb1e1dd599af1",
+      "createdAt": "2026-10-14T14:11:38.296Z"
+    },
+    {
+      "email": "restore_student_1791987098367@cvr.ac.in",
+      "id": "usr_8c778a0b",
+      "name": "Restored Student",
+      "phone": "9848078367",
+      "rollNo": "24B81A8367",
+      "role": "student",
+      "emailVerified": true,
+      "passwordHash": "bdc5fbf2ec071c638c21bbe78e8c067894072b8a6bc6a6751b08540476f0f780",
+      "createdAt": "2026-10-14T14:11:38.369Z"
     }
   ],
   "coupons": [
@@ -242,6 +286,110 @@
     }
   ],
   "orders": [
+    {
+      "id": "NST-2279",
+      "studentEmail": "test_student_1791987098253@cvr.ac.in",
+      "studentName": "test_student_1791987098253",
+      "studentPhone": "",
+      "items": [
+        {
+          "id": "samosa",
+          "price": 12,
+          "quantity": 1
+        }
+      ],
+      "totalAmount": 12,
+      "discount": 0,
+      "finalAmount": 12,
+      "paymentMethod": "Razorpay Online Gateway",
+      "transactionId": "FAIL-98346",
+      "razorpayOrderId": null,
+      "paymentStatus": "FAILED",
+      "orderStatus": "CANCELLED",
+      "failureReason": "Card declined",
+      "claimedBy": null,
+      "claimedAt": null,
+      "createdAt": "2026-10-14T14:11:38.346Z"
+    },
+    {
+      "id": "NST-6932",
+      "studentEmail": "test_student_1791987098253@cvr.ac.in",
+      "studentName": "Test Student",
+      "studentPhone": "9848012345",
+      "items": [
+        {
+          "id": "samosa",
+          "name": "Samosa",
+          "price": 12,
+          "quantity": 2,
+          "isVeg": true
+        }
+      ],
+      "totalAmount": 24,
+      "discount": 0,
+      "finalAmount": 24,
+      "paymentMethod": "Razorpay UPI / Online",
+      "transactionId": "pay_rzp_token_1791987098338",
+      "razorpayOrderId": "order_test_1791987098338",
+      "paymentStatus": "PAID",
+      "orderStatus": "PENDING_PICKUP",
+      "pickupToken": "5HP",
+      "claimedBy": null,
+      "claimedAt": null,
+      "createdAt": "2026-10-14T14:11:38.341Z"
+    },
+    {
+      "id": "NST-8582",
+      "studentEmail": "test_student_1791986388573@cvr.ac.in",
+      "studentName": "test_student_1791986388573",
+      "studentPhone": "",
+      "items": [
+        {
+          "id": "samosa",
+          "price": 12,
+          "quantity": 1
+        }
+      ],
+      "totalAmount": 12,
+      "discount": 0,
+      "finalAmount": 12,
+      "paymentMethod": "Razorpay Online Gateway",
+      "transactionId": "FAIL-88655",
+      "razorpayOrderId": null,
+      "paymentStatus": "FAILED",
+      "orderStatus": "CANCELLED",
+      "failureReason": "Card declined",
+      "claimedBy": null,
+      "claimedAt": null,
+      "createdAt": "2026-10-14T13:59:48.655Z"
+    },
+    {
+      "id": "NST-9152",
+      "studentEmail": "test_student_1791986388573@cvr.ac.in",
+      "studentName": "Test Student",
+      "studentPhone": "9848012345",
+      "items": [
+        {
+          "id": "samosa",
+          "name": "Samosa",
+          "price": 12,
+          "quantity": 2,
+          "isVeg": true
+        }
+      ],
+      "totalAmount": 24,
+      "discount": 0,
+      "finalAmount": 24,
+      "paymentMethod": "Razorpay UPI / Online",
+      "transactionId": "pay_rzp_token_1791986388649",
+      "razorpayOrderId": "order_test_1791986388649",
+      "paymentStatus": "PAID",
+      "orderStatus": "PENDING_PICKUP",
+      "pickupToken": "X2J",
+      "claimedBy": null,
+      "claimedAt": null,
+      "createdAt": "2026-10-14T13:59:48.652Z"
+    },
     {
       "id": "NST-4146",
       "studentEmail": "test_student_1791912320531@cvr.ac.in",
@@ -798,6 +946,60 @@
     }
   ],
   "payments": [
+    {
+      "id": "pmt_FAIL-98346",
+      "orderId": "NST-2279",
+      "studentEmail": "test_student_1791987098253@cvr.ac.in",
+      "studentName": "test_student_1791987098253",
+      "amount": 12,
+      "currency": "INR",
+      "paymentMethod": "Razorpay Online Gateway",
+      "transactionId": "FAIL-98346",
+      "razorpayOrderId": null,
+      "status": "FAILED",
+      "failureReason": "Card declined",
+      "createdAt": "2026-10-14T14:11:38.346Z"
+    },
+    {
+      "id": "pmt_pay_rzp_token_1791987098338",
+      "orderId": "NST-6932",
+      "studentEmail": "test_student_1791987098253@cvr.ac.in",
+      "studentName": "Test Student",
+      "amount": 24,
+      "currency": "INR",
+      "paymentMethod": "Razorpay UPI / Online",
+      "transactionId": "pay_rzp_token_1791987098338",
+      "razorpayOrderId": "order_test_1791987098338",
+      "status": "PAID",
+      "createdAt": "2026-10-14T14:11:38.341Z"
+    },
+    {
+      "id": "pmt_FAIL-88655",
+      "orderId": "NST-8582",
+      "studentEmail": "test_student_1791986388573@cvr.ac.in",
+      "studentName": "test_student_1791986388573",
+      "amount": 12,
+      "currency": "INR",
+      "paymentMethod": "Razorpay Online Gateway",
+      "transactionId": "FAIL-88655",
+      "razorpayOrderId": null,
+      "status": "FAILED",
+      "failureReason": "Card declined",
+      "createdAt": "2026-10-14T13:59:48.655Z"
+    },
+    {
+      "id": "pmt_pay_rzp_token_1791986388649",
+      "orderId": "NST-9152",
+      "studentEmail": "test_student_1791986388573@cvr.ac.in",
+      "studentName": "Test Student",
+      "amount": 24,
+      "currency": "INR",
+      "paymentMethod": "Razorpay UPI / Online",
+      "transactionId": "pay_rzp_token_1791986388649",
+      "razorpayOrderId": "order_test_1791986388649",
+      "status": "PAID",
+      "createdAt": "2026-10-14T13:59:48.652Z"
+    },
     {
       "id": "pmt_FAIL-20825",
       "orderId": "NST-4146",
