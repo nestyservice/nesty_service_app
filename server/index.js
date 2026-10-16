@@ -81,6 +81,8 @@ const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'admin@cvr.ac.in')
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || (IS_PROD ? '' : 'rzp_test_NestyCampusKeyId');
 // Note: RAZORPAY_KEY_SECRET is strictly kept on the server and never sent to clients!
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || (IS_PROD ? '' : 'nesty_rzp_server_secret_key');
+export const getRazorpayWebhookSecret = () =>
+  process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET || (IS_PROD ? '' : 'nesty_rzp_server_secret_key');
 const APP_URL = process.env.APP_URL || 'https://nesty-service-app.onrender.com';
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -496,6 +498,7 @@ const INITIAL_SEED_DATA = {
     },
   ],
   dailyTokens: [],
+  auditLogs: [],
 };
 
 function loadDb() {
@@ -512,6 +515,7 @@ function loadDb() {
         orders: parsed.orders || INITIAL_SEED_DATA.orders,
         payments: parsed.payments || INITIAL_SEED_DATA.payments,
         dailyTokens: parsed.dailyTokens || [],
+        auditLogs: parsed.auditLogs || [],
       };
     }
   } catch (err) {
@@ -550,6 +554,29 @@ function sanitizeUser(u) {
   if (!u) return null;
   const { passwordHash, ...safe } = u;
   return safe;
+}
+
+// Structured Admin Audit Logging Helper
+export function recordAuditLog(db, { action, actorEmail, actorRole = 'admin', targetType, targetId, details = {}, ip = null }) {
+  if (!Array.isArray(db.auditLogs)) {
+    db.auditLogs = [];
+  }
+  const entry = {
+    id: `audit_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+    timestamp: new Date().toISOString(),
+    action,
+    actorEmail: (actorEmail || 'system').toLowerCase(),
+    actorRole,
+    targetType,
+    targetId: targetId ? targetId.toString() : null,
+    details,
+    ip: ip || null,
+  };
+  db.auditLogs.unshift(entry);
+  if (db.auditLogs.length > 500) {
+    db.auditLogs = db.auditLogs.slice(0, 500);
+  }
+  return entry;
 }
 
 // Resolve authenticated actor strictly from verified Bearer token!
@@ -648,7 +675,14 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: '2mb' }));
+app.use(
+  express.json({
+    limit: '2mb',
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 
 // Health & Public Config Endpoint (Never exposes secret keys!)
 app.get('/api/health', (_req, res) => {
@@ -1465,6 +1499,15 @@ app.post('/api/admin/menu', (req, res) => {
     db.menuItems.push(newItem);
   }
 
+  recordAuditLog(db, {
+    action: existingIdx >= 0 ? 'MENU_ITEM_UPDATED' : 'MENU_ITEM_CREATED',
+    actorEmail: admin.email,
+    targetType: 'MENU_ITEM',
+    targetId: newItem.id,
+    details: { name: newItem.name, price: newItem.price, category: newItem.category },
+    ip: getClientIp(req),
+  });
+
   saveDb(db);
   return res.json({
     success: true,
@@ -1507,6 +1550,16 @@ app.put('/api/admin/menu/:id', (req, res) => {
   };
 
   db.menuItems[idx] = updated;
+
+  recordAuditLog(db, {
+    action: 'MENU_ITEM_UPDATED',
+    actorEmail: admin.email,
+    targetType: 'MENU_ITEM',
+    targetId: updated.id,
+    details: { name: updated.name, price: updated.price, isAvailable: updated.isAvailable, stockCount: updated.stockCount },
+    ip: getClientIp(req),
+  });
+
   saveDb(db);
   return res.json({
     success: true,
@@ -1529,6 +1582,16 @@ app.patch('/api/admin/menu/:id/toggle', (req, res) => {
   const nextAvailable =
     req.body?.isAvailable !== undefined ? Boolean(req.body.isAvailable) : !db.menuItems[idx].isAvailable;
   db.menuItems[idx].isAvailable = nextAvailable;
+
+  recordAuditLog(db, {
+    action: 'MENU_ITEM_AVAILABILITY_TOGGLED',
+    actorEmail: admin.email,
+    targetType: 'MENU_ITEM',
+    targetId: req.params.id,
+    details: { name: db.menuItems[idx].name, isAvailable: nextAvailable },
+    ip: getClientIp(req),
+  });
+
   saveDb(db);
 
   return res.json({
@@ -1549,6 +1612,16 @@ app.delete('/api/admin/menu/:id', (req, res) => {
   }
 
   const removed = db.menuItems.splice(idx, 1)[0];
+
+  recordAuditLog(db, {
+    action: 'MENU_ITEM_DELETED',
+    actorEmail: admin.email,
+    targetType: 'MENU_ITEM',
+    targetId: removed.id,
+    details: { name: removed.name },
+    ip: getClientIp(req),
+  });
+
   saveDb(db);
   return res.json({
     success: true,
@@ -1958,6 +2031,10 @@ app.post('/api/orders', (req, res) => {
   );
   const pickupToken = generatePickupToken(activeTokens);
 
+  const isPendingPayment = req.body?.paymentStatus === 'PENDING';
+  const assignedPaymentStatus = isPendingPayment ? 'PENDING' : 'PAID';
+  const assignedPickupToken = isPendingPayment ? null : pickupToken;
+
   const newOrder = {
     id: orderId,
     studentEmail: email,
@@ -1973,9 +2050,9 @@ app.post('/api/orders', (req, res) => {
     paymentMethod: (paymentMethod || 'Razorpay Online Gateway').toString(),
     transactionId: cleanTxn,
     razorpayOrderId: razorpayOrderId || null,
-    paymentStatus: 'PAID',
-    orderStatus: 'PENDING_PICKUP',
-    pickupToken,
+    paymentStatus: assignedPaymentStatus,
+    orderStatus: isPendingPayment ? 'PENDING_PAYMENT' : 'PENDING_PICKUP',
+    pickupToken: assignedPickupToken,
     claimedBy: null,
     claimedAt: null,
     createdAt: new Date().toISOString(),
@@ -2061,6 +2138,161 @@ app.post('/api/payment-failed', (req, res) => {
   db.payments.unshift(failedPayment);
   saveDb(db);
   return res.json({ success: true, order: failedOrder, payment: failedPayment });
+});
+
+// ============================================================================
+// RAZORPAY ASYNCHRONOUS SERVER-TO-SERVER WEBHOOK (Requirement #2 / Security Item 19)
+// Verifies HMAC-SHA256 signature against raw unparsed request body
+// Confirms order and generates pickup token if student closed browser during payment
+// ============================================================================
+app.post('/api/webhooks/razorpay', (req, res) => {
+  const signature = req.headers['x-razorpay-signature'];
+  if (!signature) {
+    return res.status(400).json({ success: false, message: 'Missing x-razorpay-signature header.' });
+  }
+
+  const webhookSecret = getRazorpayWebhookSecret();
+  const rawBodyText = req.rawBody ? req.rawBody.toString('utf-8') : JSON.stringify(req.body);
+  const expectedSig = crypto
+    .createHmac('sha256', webhookSecret)
+    .update(rawBodyText)
+    .digest('hex');
+
+  let isValidSignature = false;
+  try {
+    const expBuf = Buffer.from(expectedSig);
+    const sigBuf = Buffer.from(signature);
+    if (expBuf.length === sigBuf.length && crypto.timingSafeEqual(expBuf, sigBuf)) {
+      isValidSignature = true;
+    }
+  } catch {
+    isValidSignature = false;
+  }
+
+  if (!isValidSignature) {
+    return res.status(400).json({ success: false, message: 'Invalid Razorpay webhook signature.' });
+  }
+
+  const event = req.body?.event;
+  const db = loadDb();
+
+  if (event === 'order.paid' || event === 'payment.captured') {
+    const paymentEntity = req.body?.payload?.payment?.entity;
+    const orderEntity = req.body?.payload?.order?.entity;
+    const rzpOrderId = orderEntity?.id || paymentEntity?.order_id;
+    const rzpPaymentId = paymentEntity?.id;
+
+    let order = db.orders.find(
+      (o) =>
+        (rzpOrderId && o.razorpayOrderId === rzpOrderId) ||
+        (rzpPaymentId && o.transactionId === rzpPaymentId)
+    );
+
+    if (order) {
+      if (order.paymentStatus === 'PAID' || order.paymentStatus === 'SUCCESS') {
+        return res.json({ success: true, message: 'Order was already confirmed.', orderId: order.id, pickupToken: order.pickupToken });
+      }
+
+      order.paymentStatus = 'PAID';
+      order.orderStatus = 'PENDING_PICKUP';
+      if (rzpPaymentId && !order.transactionId) {
+        order.transactionId = rzpPaymentId;
+      }
+      if (!order.pickupToken) {
+        const activeTokens = new Set(
+          db.orders
+            .filter(
+              (o) =>
+                (o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS') &&
+                o.orderStatus !== 'CLAIMED' &&
+                o.orderStatus !== 'CANCELLED' &&
+                o.pickupToken
+            )
+            .map((o) => o.pickupToken)
+        );
+        order.pickupToken = generatePickupToken(activeTokens);
+      }
+
+      let paymentRecord = db.payments.find((p) => p.transactionId === order.transactionId || p.orderId === order.id);
+      if (!paymentRecord) {
+        paymentRecord = {
+          id: `pmt_${order.transactionId || Date.now()}`,
+          orderId: order.id,
+          studentEmail: order.studentEmail,
+          studentName: order.studentName,
+          amount: order.finalAmount,
+          currency: 'INR',
+          paymentMethod: 'Razorpay UPI / Online (Webhook)',
+          transactionId: order.transactionId,
+          razorpayOrderId: rzpOrderId || null,
+          status: 'PAID',
+          createdAt: new Date().toISOString(),
+        };
+        db.payments.unshift(paymentRecord);
+      } else {
+        paymentRecord.status = 'PAID';
+      }
+
+      recordAuditLog(db, {
+        action: 'PAYMENT_WEBHOOK_CONFIRMED',
+        actorEmail: 'razorpay-webhook',
+        actorRole: 'webhook',
+        targetType: 'ORDER',
+        targetId: order.id,
+        details: { rzpOrderId, rzpPaymentId, event, pickupToken: order.pickupToken },
+        ip: getClientIp(req),
+      });
+
+      saveDb(db);
+      return res.json({
+        success: true,
+        orderId: order.id,
+        pickupToken: order.pickupToken,
+        message: `Order #${order.id} verified via webhook and confirmed.`,
+      });
+    }
+
+    recordAuditLog(db, {
+      action: 'PAYMENT_WEBHOOK_UNMATCHED',
+      actorEmail: 'razorpay-webhook',
+      actorRole: 'webhook',
+      targetType: 'PAYMENT',
+      targetId: rzpPaymentId || rzpOrderId,
+      details: { rzpOrderId, rzpPaymentId, event, amount: paymentEntity?.amount },
+      ip: getClientIp(req),
+    });
+    saveDb(db);
+    return res.json({ success: true, message: 'Payment captured event logged (no matching pending order).' });
+  }
+
+  if (event === 'payment.failed') {
+    const paymentEntity = req.body?.payload?.payment?.entity;
+    const rzpOrderId = paymentEntity?.order_id;
+    const rzpPaymentId = paymentEntity?.id;
+
+    let order = db.orders.find(
+      (o) =>
+        (rzpOrderId && o.razorpayOrderId === rzpOrderId) ||
+        (rzpPaymentId && o.transactionId === rzpPaymentId)
+    );
+
+    if (order && order.paymentStatus !== 'PAID') {
+      order.paymentStatus = 'FAILED';
+      recordAuditLog(db, {
+        action: 'PAYMENT_WEBHOOK_FAILED',
+        actorEmail: 'razorpay-webhook',
+        actorRole: 'webhook',
+        targetType: 'ORDER',
+        targetId: order.id,
+        details: { rzpOrderId, rzpPaymentId, reason: paymentEntity?.error_description },
+        ip: getClientIp(req),
+      });
+      saveDb(db);
+    }
+    return res.json({ success: true, message: 'Payment failed event acknowledged.' });
+  }
+
+  return res.json({ success: true, message: `Webhook event "${event}" acknowledged.` });
 });
 
 // Payment History Endpoint (IDOR Protected)
@@ -2165,11 +2397,21 @@ app.patch('/api/admin/orders/:id/status', (req, res) => {
   }
 
   const newStatus = (req.body?.orderStatus || 'PREPARING').toString().toUpperCase();
+  const previousStatus = order.orderStatus;
   order.orderStatus = newStatus;
   if (newStatus === 'CLAIMED') {
     order.claimedAt = new Date().toISOString();
     order.claimedBy = admin.name || 'Admin';
   }
+
+  recordAuditLog(db, {
+    action: 'ORDER_STATUS_CHANGED',
+    actorEmail: admin.email,
+    targetType: 'ORDER',
+    targetId: order.id,
+    details: { previousStatus, newStatus, claimedBy: order.claimedBy, studentEmail: order.studentEmail },
+    ip: getClientIp(req),
+  });
 
   saveDb(db);
   return res.json({
@@ -2275,6 +2517,16 @@ app.post('/api/admin/coupons', (req, res) => {
     usageCount: 0,
   };
   db.coupons.push(coupon);
+
+  recordAuditLog(db, {
+    action: 'COUPON_CREATED',
+    actorEmail: admin.email,
+    targetType: 'COUPON',
+    targetId: coupon.id,
+    details: { code: coupon.code, discountPercent: coupon.discountPercent, maxDiscount: coupon.maxDiscount },
+    ip: getClientIp(req),
+  });
+
   saveDb(db);
   return res.json({ success: true, coupon, coupons: db.coupons, message: `Coupon ${code} created!` });
 });
@@ -2283,7 +2535,19 @@ app.delete('/api/admin/coupons/:id', (req, res) => {
   const db = loadDb();
   const admin = requireAdmin(req, res, db);
   if (!admin) return;
+
+  const targetCoupon = (db.coupons || []).find((c) => c.id === req.params.id);
   db.coupons = db.coupons.filter((c) => c.id !== req.params.id);
+
+  recordAuditLog(db, {
+    action: 'COUPON_DELETED',
+    actorEmail: admin.email,
+    targetType: 'COUPON',
+    targetId: req.params.id,
+    details: { code: targetCoupon?.code },
+    ip: getClientIp(req),
+  });
+
   saveDb(db);
   return res.json({ success: true, coupons: db.coupons, message: 'Coupon deleted.' });
 });
@@ -2311,6 +2575,16 @@ app.post('/api/admin/announcements', (req, res) => {
     createdAt: new Date().toISOString(),
   };
   db.announcements.unshift(ann);
+
+  recordAuditLog(db, {
+    action: 'ANNOUNCEMENT_CREATED',
+    actorEmail: admin.email,
+    targetType: 'ANNOUNCEMENT',
+    targetId: ann.id,
+    details: { title: ann.title },
+    ip: getClientIp(req),
+  });
+
   saveDb(db);
   return res.json({ success: true, announcement: ann, announcements: db.announcements, message: 'Announcement posted!' });
 });
@@ -2319,9 +2593,42 @@ app.delete('/api/admin/announcements/:id', (req, res) => {
   const db = loadDb();
   const admin = requireAdmin(req, res, db);
   if (!admin) return;
+
+  const targetAnn = (db.announcements || []).find((a) => a.id === req.params.id);
   db.announcements = db.announcements.filter((a) => a.id !== req.params.id);
+
+  recordAuditLog(db, {
+    action: 'ANNOUNCEMENT_DELETED',
+    actorEmail: admin.email,
+    targetType: 'ANNOUNCEMENT',
+    targetId: req.params.id,
+    details: { title: targetAnn?.title },
+    ip: getClientIp(req),
+  });
+
   saveDb(db);
   return res.json({ success: true, announcements: db.announcements, message: 'Announcement deleted.' });
+});
+
+// Admin Audit Logs Endpoint (Requirement #3)
+app.get('/api/admin/audit-logs', (req, res) => {
+  const db = loadDb();
+  const admin = requireAdmin(req, res, db);
+  if (!admin) return;
+
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit || 50)));
+  const actionFilter = (req.query.action || '').toString().trim().toUpperCase();
+  let logs = Array.isArray(db.auditLogs) ? db.auditLogs : [];
+
+  if (actionFilter) {
+    logs = logs.filter((l) => (l.action || '').toUpperCase() === actionFilter);
+  }
+
+  return res.json({
+    success: true,
+    total: logs.length,
+    auditLogs: logs.slice(0, limit),
+  });
 });
 
 // ============================================================================

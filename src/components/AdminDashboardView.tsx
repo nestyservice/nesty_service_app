@@ -37,6 +37,7 @@ import {
   Receipt,
   RefreshCw,
   Search,
+  ShieldCheck,
   Tag,
   ToggleLeft,
   ToggleRight,
@@ -83,7 +84,7 @@ interface AdminDashboardViewProps {
   onRefreshAll: () => void;
 }
 
-type AdminSection = 'PRODUCTS' | 'ORDERS' | 'REVENUE' | 'STUDENTS' | 'COUPONS' | 'ANNOUNCEMENTS';
+type AdminSection = 'PRODUCTS' | 'ORDERS' | 'REVENUE' | 'STUDENTS' | 'COUPONS' | 'ANNOUNCEMENTS' | 'AUDIT_LOGS';
 
 const PRESET_PRODUCT_IMAGES = [
   { label: 'Samosa', url: '/images/samosa.webp' },
@@ -129,6 +130,47 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [prodAvailable, setProdAvailable] = useState(true);
   const [prodStock, setProdStock] = useState('100');
   const [prodFormError, setProdFormError] = useState<string | null>(null);
+
+  // Audit Logs State (Security Checklist Item #12)
+  interface AuditLogEntry {
+    id: string;
+    timestamp: string;
+    action: string;
+    actorEmail: string;
+    actorRole: string;
+    targetType: string;
+    targetId: string | null;
+    details: Record<string, any>;
+    ip?: string | null;
+  }
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [loadingAuditLogs, setLoadingAuditLogs] = useState(false);
+  const [auditActionFilter, setAuditActionFilter] = useState('');
+
+  const fetchAuditLogs = async (actionFilter = auditActionFilter) => {
+    try {
+      setLoadingAuditLogs(true);
+      const token = localStorage.getItem('nesty_auth_token') || sessionStorage.getItem('nesty_auth_token') || '';
+      const url = actionFilter
+        ? `/api/admin/audit-logs?action=${encodeURIComponent(actionFilter)}&limit=100`
+        : '/api/admin/audit-logs?limit=100';
+      const res = await fetch(url, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.auditLogs)) {
+          setAuditLogs(data.auditLogs);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load audit logs:', err);
+    } finally {
+      setLoadingAuditLogs(false);
+    }
+  };
   const [isSavingProduct, setIsSavingProduct] = useState(false);
 
   // Orders filters state (Requirement #11)
@@ -333,8 +375,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   }, [revenueData, orders, revenueDate, revenueSearch, revenueStatusFilter]);
 
   useEffect(() => {
-    fetchRevenueAnalytics();
-  }, [activeTab, revenueDate, revenueStatusFilter]);
+    if (activeTab === 'REVENUE') {
+      fetchRevenueAnalytics();
+    } else if (activeTab === 'AUDIT_LOGS') {
+      fetchAuditLogs(auditActionFilter);
+    }
+  }, [activeTab, revenueDate, revenueStatusFilter, auditActionFilter]);
 
   const handleRevenueSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -551,6 +597,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             label: `Announcements (${announcements.length})`,
             icon: <Bell className="w-4 h-4" />,
             testId: 'admin_tab_announcements',
+          },
+          {
+            id: 'AUDIT_LOGS' as const,
+            label: 'Audit Logs',
+            icon: <ShieldCheck className="w-4 h-4" />,
+            testId: 'admin_tab_audit_logs',
           },
         ].map((tab) => {
           const active = activeTab === tab.id;
@@ -1673,6 +1725,125 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 </button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Audit Logs Section (Security Checklist Item #12) */}
+      {activeTab === 'AUDIT_LOGS' && (
+        <div className="space-y-6" data-testid="admin_audit_logs_panel">
+          <div className="bg-nesty-creamSurface border border-nesty-creamBorder rounded-[28px] p-6 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-6 h-6 text-nesty-burgundy" />
+                  <h3 className="text-xl font-extrabold text-nesty-burgundy">Security & Operations Audit Trail</h3>
+                </div>
+                <p className="text-xs text-nesty-textSecondary mt-1">
+                  Structured record of menu alterations, order status transitions, coupons, announcements, and webhook payments.
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <select
+                  value={auditActionFilter}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setAuditActionFilter(val);
+                    fetchAuditLogs(val);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-nesty-creamElevated border border-nesty-creamBorder text-xs font-bold text-nesty-burgundy focus:outline-none focus:border-nesty-gold"
+                >
+                  <option value="">All Actions</option>
+                  <option value="MENU_ITEM_CREATED">Menu Created</option>
+                  <option value="MENU_ITEM_UPDATED">Menu Updated</option>
+                  <option value="MENU_ITEM_AVAILABILITY_TOGGLED">Stock Toggled</option>
+                  <option value="MENU_ITEM_DELETED">Menu Deleted</option>
+                  <option value="ORDER_STATUS_CHANGED">Order Status Changed</option>
+                  <option value="PAYMENT_WEBHOOK_CONFIRMED">Webhook Payment Confirmed</option>
+                  <option value="PAYMENT_WEBHOOK_FAILED">Webhook Payment Failed</option>
+                  <option value="COUPON_CREATED">Coupon Created</option>
+                  <option value="COUPON_DELETED">Coupon Deleted</option>
+                  <option value="ANNOUNCEMENT_CREATED">Announcement Created</option>
+                  <option value="ANNOUNCEMENT_DELETED">Announcement Deleted</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => fetchAuditLogs(auditActionFilter)}
+                  className="px-3 py-2 rounded-xl bg-nesty-burgundy text-nesty-cream text-xs font-bold flex items-center gap-1.5 hover:bg-nesty-burgundy/90 transition"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingAuditLogs ? 'animate-spin' : ''}`} />
+                  <span>Refresh</span>
+                </button>
+              </div>
+            </div>
+
+            {loadingAuditLogs ? (
+              <div className="py-12 flex flex-col items-center justify-center text-center">
+                <RefreshCw className="w-8 h-8 text-nesty-burgundy animate-spin mb-2" />
+                <p className="text-xs font-bold text-nesty-textSecondary">Loading audit trail entries...</p>
+              </div>
+            ) : auditLogs.length === 0 ? (
+              <div className="py-12 text-center">
+                <ShieldCheck className="w-12 h-12 text-nesty-gold/40 mx-auto mb-2" />
+                <h4 className="text-sm font-bold text-nesty-burgundy">No Audit Logs Found</h4>
+                <p className="text-xs text-nesty-textSecondary mt-0.5">
+                  {auditActionFilter ? `No logs found matching "${auditActionFilter}".` : 'No admin modifications or webhooks recorded yet.'}
+                </p>
+              </div>
+            ) : (
+              <div className="mt-5 space-y-2.5">
+                {auditLogs.map((log) => {
+                  const dateStr = new Date(log.timestamp).toLocaleString('en-IN', {
+                    timeZone: 'Asia/Kolkata',
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  });
+
+                  let badgeColor = 'bg-blue-100 text-blue-800 border-blue-200';
+                  if (log.action.includes('CREATED') || log.action.includes('CONFIRMED')) {
+                    badgeColor = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                  } else if (log.action.includes('UPDATED') || log.action.includes('CHANGED') || log.action.includes('TOGGLED')) {
+                    badgeColor = 'bg-amber-100 text-amber-800 border-amber-200';
+                  } else if (log.action.includes('DELETED') || log.action.includes('FAILED')) {
+                    badgeColor = 'bg-rose-100 text-rose-800 border-rose-200';
+                  }
+
+                  return (
+                    <div
+                      key={log.id}
+                      className="p-3.5 rounded-2xl bg-nesty-creamElevated border border-nesty-creamBorder flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="flex flex-col gap-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`px-2 py-0.5 rounded-md font-mono text-[10px] font-bold border ${badgeColor}`}>
+                            {log.action}
+                          </span>
+                          <span className="font-bold text-nesty-burgundy">
+                            {log.targetType}{log.targetId ? ` #${log.targetId}` : ''}
+                          </span>
+                        </div>
+                        <div className="text-nesty-textSecondary flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                          <span>By: <strong className="text-nesty-textPrimary font-semibold">{log.actorEmail}</strong> ({log.actorRole})</span>
+                          {log.ip && <span>IP: {log.ip}</span>}
+                          {log.details && Object.keys(log.details).length > 0 && (
+                            <span className="font-mono text-[10px] bg-nesty-cream/40 px-1.5 py-0.5 rounded border border-nesty-creamBorder">
+                              {JSON.stringify(log.details)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-[11px] font-semibold text-nesty-textSecondary">{dateStr}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}

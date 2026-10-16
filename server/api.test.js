@@ -1013,5 +1013,195 @@ test('NESTY Complete End-to-End System Verification Suite (Requirements 1-11)', 
       }
     }
   });
+
+  // -------------------------------------------------------------------------
+  // SECTION: RAZORPAY WEBHOOK TESTS (SEC-WH-1 to SEC-WH-4)
+  // -------------------------------------------------------------------------
+  await t.test('SEC-WH-1: Webhook endpoint rejects requests with missing x-razorpay-signature header (400)', async () => {
+    const res = await requestJson(server, 'POST', '/api/webhooks/razorpay', {
+      event: 'order.paid',
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.data.success, false);
+    assert.ok(res.data.message.includes('Missing x-razorpay-signature'));
+  });
+
+  await t.test('SEC-WH-2: Webhook endpoint rejects requests with invalid x-razorpay-signature (400)', async () => {
+    const res = await requestJson(
+      server,
+      'POST',
+      '/api/webhooks/razorpay',
+      { event: 'order.paid' },
+      { 'x-razorpay-signature': 'invalid_forged_webhook_signature_0000000000000000000000000000' }
+    );
+    assert.equal(res.status, 400);
+    assert.equal(res.data.success, false);
+    assert.ok(res.data.message.includes('Invalid Razorpay webhook signature'));
+  });
+
+  await t.test('SEC-WH-3: Authentic HMAC-SHA256 signature confirms pending order and generates pickup token', async () => {
+    // 1. First place a pending test order
+    const pendingOrderRes = await requestJson(
+      server,
+      'POST',
+      '/api/orders',
+      {
+        studentEmail: testStudentEmail,
+        block: 'CB',
+        items: [{ id: 'samosa', quantity: 2 }],
+        paymentMethod: 'Razorpay UPI',
+        paymentStatus: 'PENDING',
+        transactionId: `TXN-WH-${uniqueSuffix}`,
+        razorpayOrderId: `order_wh_${uniqueSuffix}`,
+      },
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(pendingOrderRes.status, 200);
+    assert.equal(pendingOrderRes.data.order.paymentStatus, 'PENDING');
+    assert.equal(pendingOrderRes.data.pickupToken, null, 'Pending order must have no pickup token');
+
+    // 2. Simulate Razorpay sending webhook event
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET || 'nesty_rzp_server_secret_key';
+    const webhookPayload = {
+      event: 'order.paid',
+      payload: {
+        order: {
+          entity: {
+            id: `order_wh_${uniqueSuffix}`,
+            amount: 2400,
+            status: 'paid',
+          },
+        },
+        payment: {
+          entity: {
+            id: `pay_wh_${uniqueSuffix}`,
+            order_id: `order_wh_${uniqueSuffix}`,
+            amount: 2400,
+            status: 'captured',
+          },
+        },
+      },
+    };
+    const rawPayload = JSON.stringify(webhookPayload);
+    const validSignature = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(rawPayload)
+      .digest('hex');
+
+    const webhookRes = await requestJson(
+      server,
+      'POST',
+      '/api/webhooks/razorpay',
+      webhookPayload,
+      { 'x-razorpay-signature': validSignature }
+    );
+    assert.equal(webhookRes.status, 200);
+    assert.equal(webhookRes.data.success, true);
+    assert.ok(webhookRes.data.pickupToken, 'Must generate pickup token if missing');
+  });
+
+  await t.test('SEC-WH-4: Repeated webhook call is processed idempotently without error', async () => {
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET || 'nesty_rzp_server_secret_key';
+    const webhookPayload = {
+      event: 'order.paid',
+      payload: {
+        order: {
+          entity: {
+            id: `order_wh_${uniqueSuffix}`,
+            amount: 2400,
+            status: 'paid',
+          },
+        },
+        payment: {
+          entity: {
+            id: `pay_wh_${uniqueSuffix}`,
+            order_id: `order_wh_${uniqueSuffix}`,
+            amount: 2400,
+            status: 'captured',
+          },
+        },
+      },
+    };
+    const rawPayload = JSON.stringify(webhookPayload);
+    const validSignature = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(rawPayload)
+      .digest('hex');
+
+    const repeatRes = await requestJson(
+      server,
+      'POST',
+      '/api/webhooks/razorpay',
+      webhookPayload,
+      { 'x-razorpay-signature': validSignature }
+    );
+    assert.equal(repeatRes.status, 200);
+    assert.equal(repeatRes.data.success, true);
+    assert.ok(repeatRes.data.message.includes('already confirmed'));
+  });
+
+  // -------------------------------------------------------------------------
+  // SECTION: ADMIN AUDIT LOGGING TESTS (SEC-LOG-1 to SEC-LOG-3)
+  // -------------------------------------------------------------------------
+  await t.test('SEC-LOG-1: Admin audit logs endpoint requires valid admin session token (403 for student/unauthenticated)', async () => {
+    // Unauthenticated request
+    const unauthRes = await requestJson(server, 'GET', '/api/admin/audit-logs');
+    assert.equal(unauthRes.status, 403);
+
+    // Student token request
+    const studentRes = await requestJson(
+      server,
+      'GET',
+      '/api/admin/audit-logs',
+      null,
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(studentRes.status, 403);
+  });
+
+  await t.test('SEC-LOG-2: Admin actions write structured audit log entries', async () => {
+    // Admin creates an announcement
+    const annRes = await requestJson(
+      server,
+      'POST',
+      '/api/admin/announcements',
+      {
+        title: `Audit Test Announcement ${uniqueSuffix}`,
+        message: 'Testing structured security audit logs.',
+      },
+      { Authorization: `Bearer ${adminToken}` }
+    );
+    assert.equal(annRes.status, 200);
+
+    // Fetch audit logs as admin
+    const auditRes = await requestJson(
+      server,
+      'GET',
+      '/api/admin/audit-logs',
+      null,
+      { Authorization: `Bearer ${adminToken}` }
+    );
+    assert.equal(auditRes.status, 200);
+    assert.equal(auditRes.data.success, true);
+    assert.ok(Array.isArray(auditRes.data.auditLogs));
+    assert.ok(auditRes.data.auditLogs.length > 0);
+
+    const latestAnnLog = auditRes.data.auditLogs.find((l) => l.action === 'ANNOUNCEMENT_CREATED');
+    assert.ok(latestAnnLog, 'Must have recorded ANNOUNCEMENT_CREATED audit log');
+    assert.equal(latestAnnLog.actorRole, 'admin');
+  });
+
+  await t.test('SEC-LOG-3: Audit logs can be filtered by action type and respects maximum limit', async () => {
+    const filterRes = await requestJson(
+      server,
+      'GET',
+      '/api/admin/audit-logs?action=ANNOUNCEMENT_CREATED&limit=5',
+      null,
+      { Authorization: `Bearer ${adminToken}` }
+    );
+    assert.equal(filterRes.status, 200);
+    assert.ok(filterRes.data.auditLogs.every((l) => l.action === 'ANNOUNCEMENT_CREATED'));
+    assert.ok(filterRes.data.auditLogs.length <= 5);
+  });
 });
 
