@@ -1203,5 +1203,26 @@ test('NESTY Complete End-to-End System Verification Suite (Requirements 1-11)', 
     assert.ok(filterRes.data.auditLogs.every((l) => l.action === 'ANNOUNCEMENT_CREATED'));
     assert.ok(filterRes.data.auditLogs.length <= 5);
   });
+
+  // -------------------------------------------------------------------------
+  // SECTION: SUPABASE INTEGRATION TESTS (SEC-SUPA-1 & SEC-SUPA-2)
+  // -------------------------------------------------------------------------
+  await t.test('SEC-SUPA-1: Supabase status endpoint returns valid configuration payload', async () => {
+    const statusRes = await requestJson(server, 'GET', '/api/supabase/status');
+    assert.equal(statusRes.status, 200);
+    assert.equal(statusRes.data.success, true);
+    assert.ok(typeof statusRes.data.configured === 'boolean');
+    assert.ok(typeof statusRes.data.hasServiceRoleKey === 'boolean');
+  });
+
+  await t.test('SEC-SUPA-2: Supabase sync module gracefully handles missing credentials without errors', async () => {
+    const { syncUserToSupabaseAuth, isSupabaseConfigured } = await import('./supabaseClient.js');
+    // When Supabase is not configured (or env not set in test), syncUserToSupabaseAuth must safely return null
+    if (!isSupabaseConfigured()) {
+      const result = await syncUserToSupabaseAuth({ email: 'test@cvr.ac.in', name: 'Test' }, 'Pass123!');
+      assert.equal(result, null);
+    }
+  });
 });
+
 

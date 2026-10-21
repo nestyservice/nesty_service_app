@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import nodemailer from 'nodemailer';
 import { sendCampusEmail, buildVerificationOtpEmail } from './emailService.js';
+import { syncUserToSupabaseAuth, syncAllUsersToSupabase, isSupabaseConfigured } from './supabaseClient.js';
 
 dotenv.config();
 
@@ -841,6 +842,12 @@ app.post('/api/auth/login', async (req, res) => {
 
   // Ordinary subsequent logins work without requesting OTP every time
   const token = createAuthToken(user);
+
+  // Sync logged-in user to Supabase Authentication (non-blocking)
+  syncUserToSupabaseAuth(user, password).catch((err) => {
+    console.warn('[SUPABASE] Login sync warning:', err.message);
+  });
+
   return res.json({
     success: true,
     token,
@@ -894,6 +901,12 @@ app.post('/api/auth/restore-verified-account', (req, res) => {
   }
 
   const token = createAuthToken(user);
+
+  // Sync restored user to Supabase Authentication (non-blocking)
+  syncUserToSupabaseAuth(user, password).catch((err) => {
+    console.warn('[SUPABASE] Account restore sync warning:', err.message);
+  });
+
   return res.json({
     success: true,
     token,
@@ -971,6 +984,7 @@ app.post('/api/auth/register-student', async (req, res) => {
     name,
     phone,
     rollNo,
+    rawPassword: password.trim(),
     passwordHash: hashPassword(password.trim()),
     createdAt: new Date().toISOString(),
   });
@@ -1077,6 +1091,7 @@ app.post('/api/auth/verify-email/confirm', (req, res) => {
   emailVerificationOtps.delete(email);
 
   const pending = pendingRegistrations.get(email);
+  const rawPassword = pending?.rawPassword || null;
   let user = db.users.find((u) => u.email.toLowerCase() === email);
 
   if (pending) {
@@ -1109,6 +1124,11 @@ app.post('/api/auth/verify-email/confirm', (req, res) => {
 
   // Persist the verified account to disk database immediately (Requirements #1 & #3)
   saveDb(db);
+
+  // Sync new verified user to Supabase Authentication (non-blocking)
+  syncUserToSupabaseAuth(user, rawPassword).catch((err) => {
+    console.warn('[SUPABASE] Registration sync warning:', err.message);
+  });
 
   const token = createAuthToken(user);
   return res.json({
@@ -1321,6 +1341,12 @@ app.post('/api/auth/reset-password', (req, res) => {
 
   user.passwordHash = hashPassword(newPassword);
   saveDb(db);
+
+  // Sync updated password to Supabase Authentication (non-blocking)
+  syncUserToSupabaseAuth(user, newPassword).catch((err) => {
+    console.warn('[SUPABASE] Password reset sync warning:', err.message);
+  });
+
   return res.json({
     success: true,
     message: 'Password reset successful. You can now log in with your new password.',
@@ -1421,6 +1447,11 @@ app.post('/api/auth/change-password/verify-update', (req, res) => {
 
   actor.passwordHash = hashPassword(newPassword);
   saveDb(db);
+
+  // Sync updated password to Supabase Authentication (non-blocking)
+  syncUserToSupabaseAuth(actor, newPassword).catch((err) => {
+    console.warn('[SUPABASE] Password change sync warning:', err.message);
+  });
 
   return res.json({
     success: true,
@@ -3093,6 +3124,18 @@ if (fs.existsSync(distPath)) {
   });
 }
 
+// Supabase integration status endpoint
+app.get('/api/supabase/status', (req, res) => {
+  const configured = isSupabaseConfigured();
+  return res.json({
+    success: true,
+    configured,
+    url: process.env.SUPABASE_URL ? 'Configured' : 'Not set',
+    hasServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY),
+    hasAnonKey: Boolean(process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY),
+  });
+});
+
 // Start server if executed directly
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
   const startupCheck = validateProductionSecrets(process.env);
@@ -3102,5 +3145,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
   }
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Nesty Web & Shared API Server listening on http://0.0.0.0:${PORT}`);
+    if (isSupabaseConfigured()) {
+      try {
+        const db = loadDb();
+        syncAllUsersToSupabase(db.users).catch((err) => {
+          console.warn('[SUPABASE] Startup user sync notice:', err.message);
+        });
+      } catch (err) {
+        console.warn('[SUPABASE] Could not load users for initial sync:', err.message);
+      }
+    }
   });
 }
