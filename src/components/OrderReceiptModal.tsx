@@ -115,6 +115,48 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
           </p>
         </div>
 
+        {/* Vending Machine Bill Status (ACTIVE: Green / EXPIRED: Red) */}
+        {(() => {
+          const effectiveBillStatus = order.billStatus || (isClaimed ? 'EXPIRED' : 'ACTIVE');
+          const isExpired = effectiveBillStatus === 'EXPIRED';
+          return (
+            <div
+              data-testid="modal_bill_status_section"
+              className={`mt-3 p-3.5 rounded-2xl border-2 flex items-center justify-between gap-3 shadow-sm ${
+                isExpired
+                  ? 'bg-red-50 border-red-500 text-red-900'
+                  : 'bg-emerald-50 border-emerald-500 text-emerald-900'
+              }`}
+            >
+              <div className="text-left space-y-0.5">
+                <div className="text-[10px] font-black uppercase tracking-wider opacity-80">
+                  Vending Machine Bill Status
+                </div>
+                <div className="text-xs font-semibold">
+                  {isExpired
+                    ? 'Bill has been collected from vending machine'
+                    : 'Bill active & ready for collection at vending machine'}
+                </div>
+              </div>
+              <span
+                data-testid="modal_bill_status_badge"
+                className={`px-3 py-1.5 rounded-xl text-xs font-black tracking-wider uppercase flex items-center gap-1.5 shadow-sm shrink-0 ${
+                  isExpired
+                    ? 'bg-red-600 text-white border border-red-700'
+                    : 'bg-emerald-600 text-white border border-emerald-700'
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    isExpired ? 'bg-white' : 'bg-emerald-200 animate-pulse'
+                  }`}
+                />
+                <span>BILL: {effectiveBillStatus}</span>
+              </span>
+            </div>
+          );
+        })()}
+
         {/* Prominent Pickup Token Section (Requirement #8) */}
         {order.pickupToken && (
           <div

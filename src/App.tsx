@@ -26,6 +26,12 @@ import { AdminDashboardView } from './components/AdminDashboardView';
 import { CartCheckoutDrawer } from './components/CartCheckoutDrawer';
 import { OrderReceiptModal } from './components/OrderReceiptModal';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
+import {
+  getOrdersFromVault,
+  persistOrdersToVault,
+  getPaymentsFromVault,
+  persistPaymentsToVault,
+} from './lib/historyVault';
 
 const SESSION_TOKEN_KEY = 'nesty_web_auth_token';
 const SESSION_USER_KEY = 'nesty_web_auth_user';
@@ -63,8 +69,30 @@ export const App: React.FC = () => {
   const [isAuthLoading, setIsAuthLoading] = useState(false);
 
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
-  const [orders, setOrders] = useState<OrderRecord[]>([]);
-  const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [orders, setOrders] = useState<OrderRecord[]>(() => {
+    try {
+      const rawUser = localStorage.getItem(SESSION_USER_KEY);
+      if (rawUser) {
+        const u = JSON.parse(rawUser);
+        if (u.role === 'student' && u.email) {
+          return getOrdersFromVault(u.email);
+        }
+      }
+    } catch {}
+    return [];
+  });
+  const [payments, setPayments] = useState<PaymentRecord[]>(() => {
+    try {
+      const rawUser = localStorage.getItem(SESSION_USER_KEY);
+      if (rawUser) {
+        const u = JSON.parse(rawUser);
+        if (u.role === 'student' && u.email) {
+          return getPaymentsFromVault(u.email);
+        }
+      }
+    } catch {}
+    return [];
+  });
   const [students, setStudents] = useState<UserAccount[]>([]);
   const [coupons, setCoupons] = useState<CouponRecord[]>([]);
   const [announcements, setAnnouncements] = useState<AnnouncementRecord[]>([]);
@@ -153,7 +181,23 @@ export const App: React.FC = () => {
         const ordRes = await fetch(ordUrl, { headers: authHeaders() });
         if (ordRes.ok) {
           const data = await ordRes.json();
-          if (Array.isArray(data.orders)) setOrders(data.orders);
+          if (Array.isArray(data.orders)) {
+            if (currentUser.role === 'student') {
+              const merged = persistOrdersToVault(currentUser.email, data.orders);
+              setOrders(merged);
+              // Bidirectional recovery: if client vault has more historical records than server
+              // (e.g. server restart or Render container reset), sync back to backend & cloud
+              if (merged.length > data.orders.length) {
+                fetch('/api/orders/sync-vault', {
+                  method: 'POST',
+                  headers: authHeaders(),
+                  body: JSON.stringify({ email: currentUser.email, orders: merged }),
+                }).catch(() => {});
+              }
+            } else {
+              setOrders(data.orders);
+            }
+          }
         }
 
         const pmtUrl =
@@ -163,7 +207,21 @@ export const App: React.FC = () => {
         const pmtRes = await fetch(pmtUrl, { headers: authHeaders() });
         if (pmtRes.ok) {
           const data = await pmtRes.json();
-          if (Array.isArray(data.payments)) setPayments(data.payments);
+          if (Array.isArray(data.payments)) {
+            if (currentUser.role === 'student') {
+              const merged = persistPaymentsToVault(currentUser.email, data.payments);
+              setPayments(merged);
+              if (merged.length > data.payments.length) {
+                fetch('/api/orders/sync-vault', {
+                  method: 'POST',
+                  headers: authHeaders(),
+                  body: JSON.stringify({ email: currentUser.email, payments: merged }),
+                }).catch(() => {});
+              }
+            } else {
+              setPayments(data.payments);
+            }
+          }
         }
 
         if (currentUser.role === 'admin') {
@@ -178,6 +236,20 @@ export const App: React.FC = () => {
       // Silent retry
     }
   }, [currentUser, authHeaders]);
+
+  // Preload student orders and payments from persistent vault immediately on mount/user change
+  useEffect(() => {
+    if (currentUser?.email && currentUser.role === 'student') {
+      const vOrders = getOrdersFromVault(currentUser.email);
+      if (vOrders.length > 0) {
+        setOrders(vOrders);
+      }
+      const vPayments = getPaymentsFromVault(currentUser.email);
+      if (vPayments.length > 0) {
+        setPayments(vPayments);
+      }
+    }
+  }, [currentUser?.email]);
 
   useEffect(() => {
     syncAllFromBackend();
@@ -351,8 +423,9 @@ export const App: React.FC = () => {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.orders)) {
-        setOrders(data.orders);
-        const match = data.orders.find((o: OrderRecord) => o.transactionId === transactionId) || data.orders[0];
+        const merged = currentUser.role === 'student' ? persistOrdersToVault(currentUser.email, data.orders) : data.orders;
+        setOrders(merged);
+        const match = merged.find((o: OrderRecord) => o.transactionId === transactionId) || merged[0];
         if (match) setSelectedReceiptOrder(match);
       }
     }

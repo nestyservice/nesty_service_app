@@ -1223,6 +1223,257 @@ test('NESTY Complete End-to-End System Verification Suite (Requirements 1-11)', 
       assert.equal(result, null);
     }
   });
+
+  // -------------------------------------------------------------------------
+  // SECTION: PERMANENT HISTORY & VENDING BILL STATUS VERIFICATION (REQUIREMENTS 1-20)
+  // -------------------------------------------------------------------------
+  let permOrder = null;
+  let permPayment = null;
+
+  await t.test('HIST-1: Newly verified order initializes with billStatus ACTIVE and payment status PAID', async () => {
+    const rzpOrderId = `order_hist_${Date.now()}`;
+    const rzpPaymentId = `pay_hist_${Date.now()}`;
+    const secret = 'nesty_rzp_server_secret_key';
+    const signature = crypto
+      .createHmac('sha256', secret)
+      .update(`${rzpOrderId}|${rzpPaymentId}`)
+      .digest('hex');
+
+    const verifyRes = await requestJson(server, 'POST', '/api/payments/verify', {
+      razorpay_order_id: rzpOrderId,
+      razorpay_payment_id: rzpPaymentId,
+      razorpay_signature: signature,
+      studentEmail: testStudentEmail,
+      studentName: 'Test Student',
+      studentPhone: '9848012345',
+      items: [{ id: 'samosa', name: 'Samosa', price: 12, quantity: 2, isVeg: true }],
+      totalAmount: 24,
+    });
+
+    assert.equal(verifyRes.status, 200);
+    assert.equal(verifyRes.data.success, true);
+    permOrder = verifyRes.data.order;
+    assert.ok(permOrder);
+    assert.equal(permOrder.billStatus, 'ACTIVE', 'Bill status must initialize as ACTIVE');
+    assert.equal(permOrder.billCollectedAt, null, 'Bill collection timestamp must be null before collection');
+    assert.equal(permOrder.paymentStatus, 'PAID', 'Payment status must be PAID');
+
+    // Verify in GET /api/orders
+    const ordRes = await requestJson(
+      server,
+      'GET',
+      `/api/orders?email=${encodeURIComponent(testStudentEmail)}`,
+      null,
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(ordRes.status, 200);
+    const matchedOrd = ordRes.data.orders.find((o) => o.id === permOrder.id);
+    assert.ok(matchedOrd);
+    assert.equal(matchedOrd.billStatus, 'ACTIVE');
+
+    // Verify in GET /api/payments
+    const pmtRes = await requestJson(
+      server,
+      'GET',
+      `/api/payments?email=${encodeURIComponent(testStudentEmail)}`,
+      null,
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(pmtRes.status, 200);
+    permPayment = pmtRes.data.payments.find((p) => p.orderId === permOrder.id);
+    assert.ok(permPayment);
+    assert.equal(permPayment.status, 'PAID');
+    assert.equal(permPayment.billStatus, 'ACTIVE');
+  });
+
+  await t.test('HIST-2: Uncollected bill remains ACTIVE indefinitely even after 10+ days (Requirement 1, 2, 7, 9)', async () => {
+    // Age the order and payment in the isolated DB to 10 days in the past
+    const dbRaw = JSON.parse(fs.readFileSync(isolatedDbFile, 'utf8'));
+    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+
+    const dbOrd = dbRaw.orders.find((o) => o.id === permOrder.id);
+    if (dbOrd) dbOrd.createdAt = tenDaysAgo;
+    const dbPmt = dbRaw.payments.find((p) => p.orderId === permOrder.id);
+    if (dbPmt) dbPmt.createdAt = tenDaysAgo;
+    fs.writeFileSync(isolatedDbFile, JSON.stringify(dbRaw, null, 2), 'utf8');
+
+    // Fetch order history after simulated 10 days
+    const ordRes = await requestJson(
+      server,
+      'GET',
+      `/api/orders?email=${encodeURIComponent(testStudentEmail)}`,
+      null,
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(ordRes.status, 200);
+    const foundOrd = ordRes.data.orders.find((o) => o.id === permOrder.id);
+    assert.ok(foundOrd, '10-day-old order must remain accessible permanently (not deleted)');
+    assert.equal(foundOrd.billStatus, 'ACTIVE', 'Uncollected bill must remain ACTIVE even after days pass');
+
+    // Fetch payment history after simulated 10 days
+    const pmtRes = await requestJson(
+      server,
+      'GET',
+      `/api/payments?email=${encodeURIComponent(testStudentEmail)}`,
+      null,
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(pmtRes.status, 200);
+    const foundPmt = pmtRes.data.payments.find((p) => p.orderId === permOrder.id);
+    assert.ok(foundPmt, '10-day-old payment must remain accessible permanently (not deleted)');
+    assert.equal(foundPmt.status, 'PAID');
+    assert.equal(foundPmt.billStatus, 'ACTIVE');
+  });
+
+  await t.test('HIST-3: Verified vending machine collection transitions bill to EXPIRED while preserving PAID status (Requirement 5, 6, 8, 13)', async () => {
+    // Vending machine confirms collection with matching token
+    const collectRes = await requestJson(server, 'POST', '/api/vending/confirm-collection', {
+      orderId: permOrder.id,
+      pickupToken: permOrder.pickupToken,
+      machineId: 'VM-COUNTER-01',
+    });
+    assert.equal(collectRes.status, 200);
+    assert.equal(collectRes.data.success, true);
+    assert.equal(collectRes.data.billStatus, 'EXPIRED');
+    assert.ok(collectRes.data.billCollectedAt);
+
+    // Verify in student Order History
+    const ordRes = await requestJson(
+      server,
+      'GET',
+      `/api/orders?email=${encodeURIComponent(testStudentEmail)}`,
+      null,
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    const updatedOrd = ordRes.data.orders.find((o) => o.id === permOrder.id);
+    assert.ok(updatedOrd, 'Order must remain visible after bill collection');
+    assert.equal(updatedOrd.billStatus, 'EXPIRED', 'Bill status must update to EXPIRED');
+    assert.equal(updatedOrd.paymentStatus, 'PAID', 'Payment status must remain PAID, never changed to EXPIRED');
+
+    // Verify in student Payment History
+    const pmtRes = await requestJson(
+      server,
+      'GET',
+      `/api/payments?email=${encodeURIComponent(testStudentEmail)}`,
+      null,
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    const updatedPmt = pmtRes.data.payments.find((p) => p.orderId === permOrder.id);
+    assert.ok(updatedPmt, 'Payment record must remain permanently in history');
+    assert.equal(updatedPmt.status, 'PAID', 'Payment status must remain PAID');
+    assert.equal(updatedPmt.billStatus, 'EXPIRED', 'Payment bill status must update to EXPIRED');
+  });
+
+  await t.test('HIST-4: Student ownership isolation prevents unauthorized collection or snooping (Requirement 11, 14, 15)', async () => {
+    // Register second student
+    const student2Email = `student2_${Date.now()}@cvr.ac.in`;
+    const student2Password = 'Pass123456';
+    await requestJson(server, 'POST', '/api/auth/register-student', {
+      email: student2Email,
+      password: student2Password,
+      name: 'Second Student',
+      phone: '9848099999',
+    });
+    // Set OTP and verify
+    _testOtpStores.emailVerificationOtps.set(student2Email, {
+      otpHash: crypto.createHash('sha256').update('112233').digest('hex'),
+      expiresAt: Date.now() + 600000,
+      attempts: 0,
+    });
+    await requestJson(server, 'POST', '/api/auth/verify-email/confirm', {
+      email: student2Email,
+      otp: '112233',
+    });
+    const s2Login = await requestJson(server, 'POST', '/api/auth/login', {
+      identifier: student2Email,
+      password: student2Password,
+    });
+    const s2Token = s2Login.data.token;
+
+    // Student 2 cannot collect Student 1's bill via student endpoint
+    const unauthCollect = await requestJson(
+      server,
+      'POST',
+      `/api/orders/${permOrder.id}/collect-bill`,
+      {},
+      { Authorization: `Bearer ${s2Token}` }
+    );
+    assert.equal(unauthCollect.status, 403, 'Cross-student bill collection must be strictly forbidden (403)');
+
+    // Vending machine confirmation with wrong pickup token is rejected
+    const badTokenCollect = await requestJson(server, 'POST', '/api/vending/confirm-collection', {
+      orderId: permOrder.id,
+      pickupToken: 'XYZ',
+    });
+    assert.equal(badTokenCollect.status, 400, 'Mismatched pickup token must be rejected');
+  });
+
+  await t.test('HIST-5: History survives database reload/reset via bidirectional vault reconciliation (Requirement 4, 16)', async () => {
+    // Create a mock past order that exists in student's client vault
+    const vaultOrder = {
+      id: `ord_vault_${Date.now()}`,
+      studentEmail: testStudentEmail,
+      studentName: 'Test Student',
+      items: [{ id: 'samosa', name: 'Samosa', price: 12, quantity: 1, isVeg: true }],
+      subtotal: 12,
+      discount: 0,
+      finalAmount: 12,
+      paymentMethod: 'UPI',
+      paymentStatus: 'PAID',
+      orderStatus: 'READY',
+      pickupToken: 'A1B',
+      billStatus: 'ACTIVE',
+      billCollectedAt: null,
+      transactionId: `txn_vault_${Date.now()}`,
+      createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+
+    const vaultPayment = {
+      id: `pmt_vault_${Date.now()}`,
+      orderId: vaultOrder.id,
+      studentEmail: testStudentEmail,
+      amount: 12,
+      paymentMethod: 'UPI',
+      status: 'PAID',
+      billStatus: 'ACTIVE',
+      billCollectedAt: null,
+      transactionId: vaultOrder.transactionId,
+      createdAt: vaultOrder.createdAt,
+    };
+
+    // Call sync-vault endpoint
+    const syncRes = await requestJson(
+      server,
+      'POST',
+      '/api/orders/sync-vault',
+      {
+        email: testStudentEmail,
+        orders: [vaultOrder],
+        payments: [vaultPayment],
+      },
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(syncRes.status, 200);
+    assert.equal(syncRes.data.success, true);
+    assert.ok(syncRes.data.orders.some((o) => o.id === vaultOrder.id));
+    assert.ok(syncRes.data.payments.some((p) => p.id === vaultPayment.id));
+
+    // Verify repeated sync is idempotent (no duplicates created)
+    const repeatSync = await requestJson(
+      server,
+      'POST',
+      '/api/orders/sync-vault',
+      {
+        email: testStudentEmail,
+        orders: [vaultOrder],
+        payments: [vaultPayment],
+      },
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(repeatSync.status, 200);
+    const occurrences = repeatSync.data.orders.filter((o) => o.id === vaultOrder.id);
+    assert.equal(occurrences.length, 1, 'Idempotent sync must not create duplicate orders');
+  });
 });
 
 

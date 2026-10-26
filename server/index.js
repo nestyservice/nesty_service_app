@@ -7,7 +7,14 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import nodemailer from 'nodemailer';
 import { sendCampusEmail, buildVerificationOtpEmail } from './emailService.js';
-import { syncUserToSupabaseAuth, syncAllUsersToSupabase, isSupabaseConfigured } from './supabaseClient.js';
+import {
+  syncUserToSupabaseAuth,
+  syncAllUsersToSupabase,
+  isSupabaseConfigured,
+  syncOrderToSupabase,
+  syncPaymentToSupabase,
+  fetchPersistentHistoryFromSupabase,
+} from './supabaseClient.js';
 
 dotenv.config();
 
@@ -187,7 +194,7 @@ export function createAuthToken(user) {
     email: user.email.toLowerCase(),
     role: user.role.toLowerCase(),
     id: user.id,
-    exp: Date.now() + 1000 * 60 * 60 * 24 * 7, // 7 days
+    exp: Date.now() + 1000 * 60 * 60 * 24 * 365, // 365 days (permanent session retention)
   };
   const base64Payload = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = crypto
@@ -444,6 +451,8 @@ const INITIAL_SEED_DATA = {
       razorpayOrderId: 'order_P9xK2m81L',
       paymentStatus: 'PAID',
       orderStatus: 'PENDING_PICKUP',
+      billStatus: 'ACTIVE',
+      billCollectedAt: null,
       claimedBy: null,
       claimedAt: null,
       createdAt: '2026-10-09T10:30:00Z',
@@ -465,6 +474,8 @@ const INITIAL_SEED_DATA = {
       razorpayOrderId: 'order_P8mN1k72J',
       paymentStatus: 'PAID',
       orderStatus: 'CLAIMED',
+      billStatus: 'EXPIRED',
+      billCollectedAt: '2026-10-08T13:20:00Z',
       claimedBy: 'Canteen Staff',
       claimedAt: '2026-10-08T13:20:00Z',
       createdAt: '2026-10-08T13:05:00Z',
@@ -482,6 +493,8 @@ const INITIAL_SEED_DATA = {
       transactionId: 'TXN-RZP-982341',
       razorpayOrderId: 'order_P9xK2m81L',
       status: 'PAID',
+      billStatus: 'ACTIVE',
+      billCollectedAt: null,
       createdAt: '2026-10-09T10:30:00Z',
     },
     {
@@ -495,6 +508,8 @@ const INITIAL_SEED_DATA = {
       transactionId: 'TXN-RZP-774120',
       razorpayOrderId: 'order_P8mN1k72J',
       status: 'PAID',
+      billStatus: 'EXPIRED',
+      billCollectedAt: '2026-10-08T13:20:00Z',
       createdAt: '2026-10-08T13:05:00Z',
     },
   ],
@@ -508,13 +523,31 @@ function loadDb() {
     if (fs.existsSync(dbFile)) {
       const raw = fs.readFileSync(dbFile, 'utf-8');
       const parsed = JSON.parse(raw);
+      const rawOrders = parsed.orders || INITIAL_SEED_DATA.orders;
+      const rawPayments = parsed.payments || INITIAL_SEED_DATA.payments;
+
+      const orders = rawOrders.map((o) => {
+        const isClaimed = o.orderStatus === 'CLAIMED';
+        const billStatus = o.billStatus || (isClaimed ? 'EXPIRED' : 'ACTIVE');
+        const billCollectedAt = o.billCollectedAt || (billStatus === 'EXPIRED' ? (o.claimedAt || o.createdAt) : null);
+        return { ...o, billStatus, billCollectedAt };
+      });
+
+      const payments = rawPayments.map((p) => {
+        const matchedOrd = orders.find((o) => o.id === p.orderId || o.transactionId === p.transactionId);
+        const isCollected = p.billStatus === 'EXPIRED' || (matchedOrd && matchedOrd.billStatus === 'EXPIRED');
+        const billStatus = p.billStatus || (isCollected ? 'EXPIRED' : 'ACTIVE');
+        const billCollectedAt = p.billCollectedAt || (billStatus === 'EXPIRED' ? (matchedOrd?.billCollectedAt || p.createdAt) : null);
+        return { ...p, billStatus, billCollectedAt };
+      });
+
       return {
         menuItems: parsed.menuItems || INITIAL_SEED_DATA.menuItems,
         users: parsed.users || INITIAL_SEED_DATA.users,
         coupons: parsed.coupons || INITIAL_SEED_DATA.coupons,
         announcements: parsed.announcements || INITIAL_SEED_DATA.announcements,
-        orders: parsed.orders || INITIAL_SEED_DATA.orders,
-        payments: parsed.payments || INITIAL_SEED_DATA.payments,
+        orders,
+        payments,
         dailyTokens: parsed.dailyTokens || [],
         auditLogs: parsed.auditLogs || [],
       };
@@ -1921,6 +1954,8 @@ app.post('/api/payments/verify', (req, res) => {
     razorpayOrderId: razorpay_order_id || null,
     paymentStatus: 'PAID',
     orderStatus: 'PENDING_PICKUP',
+    billStatus: 'ACTIVE',
+    billCollectedAt: null,
     pickupToken,
     claimedBy: null,
     claimedAt: null,
@@ -1938,12 +1973,18 @@ app.post('/api/payments/verify', (req, res) => {
     transactionId: razorpay_payment_id,
     razorpayOrderId: razorpay_order_id || null,
     status: 'PAID',
+    billStatus: 'ACTIVE',
+    billCollectedAt: null,
     createdAt: new Date().toISOString(),
   };
 
   db.orders.unshift(newOrder);
   db.payments.unshift(newPayment);
   saveDb(db);
+
+  // Sync order & payment to cloud database if available (non-blocking)
+  syncOrderToSupabase(newOrder).catch(() => {});
+  syncPaymentToSupabase(newPayment).catch(() => {});
 
   return res.json({
     success: true,
@@ -2083,6 +2124,8 @@ app.post('/api/orders', (req, res) => {
     razorpayOrderId: razorpayOrderId || null,
     paymentStatus: assignedPaymentStatus,
     orderStatus: isPendingPayment ? 'PENDING_PAYMENT' : 'PENDING_PICKUP',
+    billStatus: 'ACTIVE',
+    billCollectedAt: null,
     pickupToken: assignedPickupToken,
     claimedBy: null,
     claimedAt: null,
@@ -2100,6 +2143,8 @@ app.post('/api/orders', (req, res) => {
     transactionId: cleanTxn,
     razorpayOrderId: razorpayOrderId || null,
     status: 'PAID',
+    billStatus: 'ACTIVE',
+    billCollectedAt: null,
     createdAt: new Date().toISOString(),
   };
 
@@ -2112,6 +2157,10 @@ app.post('/api/orders', (req, res) => {
   }
 
   saveDb(db);
+
+  // Sync order & payment to cloud database if available (non-blocking)
+  syncOrderToSupabase(newOrder).catch(() => {});
+  syncPaymentToSupabase(newPayment).catch(() => {});
 
   return res.json({
     success: true,
@@ -2433,6 +2482,18 @@ app.patch('/api/admin/orders/:id/status', (req, res) => {
   if (newStatus === 'CLAIMED') {
     order.claimedAt = new Date().toISOString();
     order.claimedBy = admin.name || 'Admin';
+    order.billStatus = 'EXPIRED';
+    order.billCollectedAt = order.billCollectedAt || new Date().toISOString();
+
+    const matchingPayment = db.payments.find(
+      (p) => p.orderId === order.id || p.transactionId === order.transactionId
+    );
+    if (matchingPayment) {
+      matchingPayment.billStatus = 'EXPIRED';
+      matchingPayment.billCollectedAt = order.billCollectedAt;
+      syncPaymentToSupabase(matchingPayment).catch(() => {});
+    }
+    syncOrderToSupabase(order).catch(() => {});
   }
 
   recordAuditLog(db, {
@@ -2440,7 +2501,7 @@ app.patch('/api/admin/orders/:id/status', (req, res) => {
     actorEmail: admin.email,
     targetType: 'ORDER',
     targetId: order.id,
-    details: { previousStatus, newStatus, claimedBy: order.claimedBy, studentEmail: order.studentEmail },
+    details: { previousStatus, newStatus, claimedBy: order.claimedBy, studentEmail: order.studentEmail, billStatus: order.billStatus },
     ip: getClientIp(req),
   });
 
@@ -2449,6 +2510,274 @@ app.patch('/api/admin/orders/:id/status', (req, res) => {
     success: true,
     order,
     message: `Order #${order.id} marked as ${newStatus}`,
+  });
+});
+
+// ============================================================================
+// VENDING MACHINE BILL COLLECTION CONFIRMATION (Requirements #5 - #11, #14)
+// Verified endpoint: Marks bill EXPIRED only upon actual vending machine collection
+// ============================================================================
+app.post('/api/vending/confirm-collection', (req, res) => {
+  const db = loadDb();
+  const { orderId, pickupToken, transactionId, machineId } = req.body || {};
+  const actor = resolveActor(req, db);
+
+  const cleanOrderId = (orderId || '').toString().trim().replace(/^#/, '');
+  const cleanTxn = (transactionId || '').toString().trim();
+  const cleanToken = (pickupToken || '').toString().trim().toUpperCase();
+
+  const order = db.orders.find(
+    (o) =>
+      (cleanOrderId && o.id.toLowerCase() === cleanOrderId.toLowerCase()) ||
+      (cleanTxn && o.transactionId.toLowerCase() === cleanTxn.toLowerCase()) ||
+      (cleanToken && o.pickupToken && o.pickupToken.toUpperCase() === cleanToken)
+  );
+
+  if (!order) {
+    return res.status(404).json({ success: false, message: 'Order not found for vending collection.' });
+  }
+
+  // Security: If actor is authenticated as student, ensure ownership (Requirement #11)
+  if (actor && actor.role.toLowerCase() === 'student') {
+    if (order.studentEmail.toLowerCase() !== actor.email.toLowerCase()) {
+      return res.status(403).json({ success: false, message: 'Access denied: You can only confirm your own bills.' });
+    }
+  }
+
+  // Strictly require order to be PAID/SUCCESS before collection (Requirement #9)
+  const isPaid = order.paymentStatus === 'PAID' || order.paymentStatus === 'SUCCESS';
+  if (!isPaid) {
+    return res.status(400).json({
+      success: false,
+      message: 'Cannot confirm bill collection for unpaid or failed order.',
+    });
+  }
+
+  // If pickupToken is supplied, strictly verify match
+  if (cleanToken && order.pickupToken && order.pickupToken.toUpperCase() !== cleanToken) {
+    return res.status(400).json({
+      success: false,
+      message: 'Pickup token mismatch. Please provide the correct token.',
+    });
+  }
+
+  // Idempotent: If already collected, return success without duplicate modification
+  if (order.billStatus === 'EXPIRED') {
+    const matchingPayment = db.payments.find(
+      (p) => p.orderId === order.id || p.transactionId === order.transactionId
+    );
+    return res.json({
+      success: true,
+      message: `Bill for Order #${order.id} was already confirmed as collected.`,
+      order,
+      payment: matchingPayment || null,
+      billStatus: 'EXPIRED',
+    });
+  }
+
+  const nowIso = new Date().toISOString();
+  order.billStatus = 'EXPIRED';
+  order.billCollectedAt = nowIso;
+  order.orderStatus = 'CLAIMED';
+  order.claimedAt = order.claimedAt || nowIso;
+  order.claimedBy = machineId ? `Vending Machine (${machineId})` : 'Vending Machine';
+
+  const matchingPayment = db.payments.find(
+    (p) => p.orderId === order.id || p.transactionId === order.transactionId
+  );
+  if (matchingPayment) {
+    matchingPayment.billStatus = 'EXPIRED';
+    matchingPayment.billCollectedAt = nowIso;
+    syncPaymentToSupabase(matchingPayment).catch(() => {});
+  }
+
+  recordAuditLog(db, {
+    action: 'VENDING_BILL_COLLECTED',
+    actorEmail: actor?.email || 'vending_machine',
+    actorRole: actor?.role || 'vending',
+    targetType: 'ORDER',
+    targetId: order.id,
+    details: {
+      orderId: order.id,
+      transactionId: order.transactionId,
+      pickupToken: order.pickupToken,
+      machineId: machineId || 'VM-CANTEEN-01',
+      studentEmail: order.studentEmail,
+      billStatus: 'EXPIRED',
+    },
+    ip: getClientIp(req),
+  });
+
+  saveDb(db);
+  syncOrderToSupabase(order).catch(() => {});
+
+  return res.json({
+    success: true,
+    message: `Bill collection verified from vending machine. Order #${order.id} bill status updated to EXPIRED.`,
+    order,
+    payment: matchingPayment || null,
+    billStatus: 'EXPIRED',
+    billCollectedAt: nowIso,
+  });
+});
+
+// Dedicated authenticated bill collection endpoint
+app.post('/api/orders/:id/collect-bill', (req, res) => {
+  const db = loadDb();
+  const actor = resolveActor(req, db);
+  if (!actor) {
+    return res.status(401).json({ success: false, message: 'Authentication required to collect bill.' });
+  }
+
+  const order = db.orders.find((o) => o.id === req.params.id);
+  if (!order) {
+    return res.status(404).json({ success: false, message: 'Order not found.' });
+  }
+
+  // Student ownership check (Requirement #11)
+  if (actor.role.toLowerCase() === 'student' && order.studentEmail.toLowerCase() !== actor.email.toLowerCase()) {
+    return res.status(403).json({ success: false, message: 'Access denied: You can only collect your own bill.' });
+  }
+
+  const isPaid = order.paymentStatus === 'PAID' || order.paymentStatus === 'SUCCESS';
+  if (!isPaid) {
+    return res.status(400).json({ success: false, message: 'Cannot collect bill for unpaid order.' });
+  }
+
+  const nowIso = new Date().toISOString();
+  order.billStatus = 'EXPIRED';
+  order.billCollectedAt = order.billCollectedAt || nowIso;
+  order.orderStatus = 'CLAIMED';
+  order.claimedAt = order.claimedAt || nowIso;
+  order.claimedBy = actor.name || 'Student';
+
+  const matchingPayment = db.payments.find(
+    (p) => p.orderId === order.id || p.transactionId === order.transactionId
+  );
+  if (matchingPayment) {
+    matchingPayment.billStatus = 'EXPIRED';
+    matchingPayment.billCollectedAt = nowIso;
+    syncPaymentToSupabase(matchingPayment).catch(() => {});
+  }
+
+  saveDb(db);
+  syncOrderToSupabase(order).catch(() => {});
+
+  return res.json({
+    success: true,
+    message: `Bill collected for Order #${order.id}.`,
+    order,
+    payment: matchingPayment || null,
+  });
+});
+
+// ============================================================================
+// DURABLE HISTORY VAULT SYNC (Requirements #1 - #4)
+// Reconciles and merges client-vaulted orders/payments across server container resets
+// ============================================================================
+app.post('/api/orders/sync-vault', (req, res) => {
+  const db = loadDb();
+  const actor = resolveActor(req, db);
+  if (!actor) {
+    return res.status(401).json({ success: false, message: 'Authentication required to sync history vault.' });
+  }
+
+  const { orders: clientOrders = [], payments: clientPayments = [] } = req.body || {};
+  const studentEmail = actor.email.toLowerCase();
+
+  let syncedOrdersCount = 0;
+  let syncedPaymentsCount = 0;
+
+  if (Array.isArray(clientOrders)) {
+    for (const cOrd of clientOrders) {
+      if (!cOrd || !cOrd.id) continue;
+      // Strictly enforce that students can only sync their OWN history (Requirement #11 & #15)
+      if (cOrd.studentEmail && cOrd.studentEmail.toLowerCase() !== studentEmail && actor.role !== 'admin') {
+        continue;
+      }
+
+      const existing = db.orders.find((o) => o.id === cOrd.id || (cOrd.transactionId && o.transactionId === cOrd.transactionId));
+      if (!existing) {
+        const sanitized = {
+          id: cOrd.id,
+          studentEmail: cOrd.studentEmail || studentEmail,
+          studentName: cOrd.studentName || actor.name || 'Student',
+          studentPhone: cOrd.studentPhone || actor.phone || '',
+          items: Array.isArray(cOrd.items) ? cOrd.items : [],
+          totalAmount: Number(cOrd.totalAmount || cOrd.finalAmount || 0),
+          discount: Number(cOrd.discount || 0),
+          finalAmount: Number(cOrd.finalAmount || 0),
+          paymentMethod: cOrd.paymentMethod || 'Razorpay Online Gateway',
+          transactionId: cOrd.transactionId || `TXN-${cOrd.id}`,
+          razorpayOrderId: cOrd.razorpayOrderId || null,
+          paymentStatus: cOrd.paymentStatus || 'PAID',
+          orderStatus: cOrd.orderStatus || 'PENDING_PICKUP',
+          billStatus: cOrd.billStatus || (cOrd.orderStatus === 'CLAIMED' ? 'EXPIRED' : 'ACTIVE'),
+          billCollectedAt: cOrd.billCollectedAt || null,
+          pickupToken: cOrd.pickupToken || null,
+          claimedBy: cOrd.claimedBy || null,
+          claimedAt: cOrd.claimedAt || null,
+          createdAt: cOrd.createdAt || new Date().toISOString(),
+        };
+        db.orders.unshift(sanitized);
+        syncOrderToSupabase(sanitized).catch(() => {});
+        syncedOrdersCount++;
+      } else {
+        // If client record has verified EXPIRED bill collection, maintain EXPIRED
+        if (cOrd.billStatus === 'EXPIRED' && existing.billStatus !== 'EXPIRED') {
+          existing.billStatus = 'EXPIRED';
+          existing.billCollectedAt = cOrd.billCollectedAt || new Date().toISOString();
+          existing.orderStatus = 'CLAIMED';
+          syncOrderToSupabase(existing).catch(() => {});
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(clientPayments)) {
+    for (const cPmt of clientPayments) {
+      if (!cPmt || !cPmt.id) continue;
+      if (cPmt.studentEmail && cPmt.studentEmail.toLowerCase() !== studentEmail && actor.role !== 'admin') {
+        continue;
+      }
+
+      const existing = db.payments.find((p) => p.id === cPmt.id || (cPmt.transactionId && p.transactionId === cPmt.transactionId));
+      if (!existing) {
+        const sanitized = {
+          id: cPmt.id,
+          orderId: cPmt.orderId || `ORD-${Date.now()}`,
+          studentEmail: cPmt.studentEmail || studentEmail,
+          studentName: cPmt.studentName || actor.name || 'Student',
+          amount: Number(cPmt.amount || 0),
+          currency: cPmt.currency || 'INR',
+          paymentMethod: cPmt.paymentMethod || 'Razorpay UPI / Online',
+          transactionId: cPmt.transactionId || cPmt.id,
+          razorpayOrderId: cPmt.razorpayOrderId || null,
+          status: cPmt.status || 'PAID',
+          billStatus: cPmt.billStatus || 'ACTIVE',
+          billCollectedAt: cPmt.billCollectedAt || null,
+          createdAt: cPmt.createdAt || new Date().toISOString(),
+        };
+        db.payments.unshift(sanitized);
+        syncPaymentToSupabase(sanitized).catch(() => {});
+        syncedPaymentsCount++;
+      }
+    }
+  }
+
+  if (syncedOrdersCount > 0 || syncedPaymentsCount > 0) {
+    saveDb(db);
+  }
+
+  const studentOrders = db.orders.filter((o) => o.studentEmail.toLowerCase() === studentEmail);
+  const studentPayments = (db.payments || []).filter((p) => p.studentEmail.toLowerCase() === studentEmail);
+
+  return res.json({
+    success: true,
+    syncedOrdersCount,
+    syncedPaymentsCount,
+    orders: studentOrders,
+    payments: studentPayments,
   });
 });
 
@@ -3151,6 +3480,33 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
         syncAllUsersToSupabase(db.users).catch((err) => {
           console.warn('[SUPABASE] Startup user sync notice:', err.message);
         });
+
+        // Reconcile cloud-persisted historical orders and payments from Supabase
+        fetchPersistentHistoryFromSupabase()
+          .then(({ orders: cloudOrders, payments: cloudPayments }) => {
+            if (cloudOrders.length > 0 || cloudPayments.length > 0) {
+              let changed = false;
+              for (const co of cloudOrders) {
+                if (!db.orders.some((o) => o.id === co.id)) {
+                  db.orders.push(co);
+                  changed = true;
+                }
+              }
+              for (const cp of cloudPayments) {
+                if (!db.payments.some((p) => p.id === cp.id)) {
+                  db.payments.push(cp);
+                  changed = true;
+                }
+              }
+              if (changed) {
+                saveDb(db);
+                console.log(`[SUPABASE] Reconciled ${cloudOrders.length} orders & ${cloudPayments.length} payments into local database.`);
+              }
+            }
+          })
+          .catch((err) => {
+            console.warn('[SUPABASE] Startup history load notice:', err.message);
+          });
       } catch (err) {
         console.warn('[SUPABASE] Could not load users for initial sync:', err.message);
       }

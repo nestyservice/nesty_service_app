@@ -122,3 +122,125 @@ export async function syncAllUsersToSupabase(users = []) {
   }
   console.log('[SUPABASE] Initial user sync to Supabase complete.');
 }
+
+/**
+ * Persist an order to Supabase table (if configured and table exists).
+ * Non-blocking, failsafe.
+ */
+export async function syncOrderToSupabase(order) {
+  const client = getSupabaseClient();
+  if (!client || !order || !order.id) return null;
+  try {
+    const payload = {
+      id: order.id,
+      student_email: order.studentEmail,
+      student_name: order.studentName,
+      student_phone: order.studentPhone,
+      items: order.items,
+      total_amount: order.totalAmount,
+      discount: order.discount,
+      final_amount: order.finalAmount,
+      payment_method: order.paymentMethod,
+      transaction_id: order.transactionId,
+      razorpay_order_id: order.razorpayOrderId,
+      payment_status: order.paymentStatus,
+      order_status: order.orderStatus,
+      bill_status: order.billStatus || (order.orderStatus === 'CLAIMED' ? 'EXPIRED' : 'ACTIVE'),
+      bill_collected_at: order.billCollectedAt || null,
+      pickup_token: order.pickupToken || null,
+      claimed_by: order.claimedBy || null,
+      claimed_at: order.claimedAt || null,
+      created_at: order.createdAt,
+    };
+    await client.from('orders').upsert(payload, { onConflict: 'id' }).catch(() => {});
+    return true;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist a payment to Supabase table (if configured and table exists).
+ * Non-blocking, failsafe.
+ */
+export async function syncPaymentToSupabase(payment) {
+  const client = getSupabaseClient();
+  if (!client || !payment || !payment.id) return null;
+  try {
+    const payload = {
+      id: payment.id,
+      order_id: payment.orderId,
+      student_email: payment.studentEmail,
+      student_name: payment.studentName,
+      amount: payment.amount,
+      currency: payment.currency || 'INR',
+      payment_method: payment.paymentMethod,
+      transaction_id: payment.transactionId,
+      razorpay_order_id: payment.razorpayOrderId,
+      status: payment.status,
+      bill_status: payment.billStatus || 'ACTIVE',
+      bill_collected_at: payment.billCollectedAt || null,
+      created_at: payment.createdAt,
+    };
+    await client.from('payments').upsert(payload, { onConflict: 'id' }).catch(() => {});
+    return true;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load cloud-persisted historical orders and payments from Supabase on startup.
+ */
+export async function fetchPersistentHistoryFromSupabase() {
+  const client = getSupabaseClient();
+  if (!client) return { orders: [], payments: [] };
+  try {
+    const [ordRes, pmtRes] = await Promise.all([
+      client.from('orders').select('*').catch(() => ({ data: null })),
+      client.from('payments').select('*').catch(() => ({ data: null })),
+    ]);
+
+    const orders = (ordRes?.data || []).map((o) => ({
+      id: o.id,
+      studentEmail: o.student_email,
+      studentName: o.student_name,
+      studentPhone: o.student_phone,
+      items: o.items || [],
+      totalAmount: Number(o.total_amount || 0),
+      discount: Number(o.discount || 0),
+      finalAmount: Number(o.final_amount || 0),
+      paymentMethod: o.payment_method,
+      transactionId: o.transaction_id,
+      razorpayOrderId: o.razorpay_order_id,
+      paymentStatus: o.payment_status,
+      orderStatus: o.order_status,
+      billStatus: o.bill_status || (o.order_status === 'CLAIMED' ? 'EXPIRED' : 'ACTIVE'),
+      billCollectedAt: o.bill_collected_at,
+      pickupToken: o.pickup_token,
+      claimedBy: o.claimed_by,
+      claimedAt: o.claimed_at,
+      createdAt: o.created_at,
+    }));
+
+    const payments = (pmtRes?.data || []).map((p) => ({
+      id: p.id,
+      orderId: p.order_id,
+      studentEmail: p.student_email,
+      studentName: p.student_name,
+      amount: Number(p.amount || 0),
+      currency: p.currency || 'INR',
+      paymentMethod: p.payment_method,
+      transactionId: p.transaction_id,
+      razorpayOrderId: p.razorpay_order_id,
+      status: p.status,
+      billStatus: p.bill_status || 'ACTIVE',
+      billCollectedAt: p.bill_collected_at,
+      createdAt: p.created_at,
+    }));
+
+    return { orders, payments };
+  } catch {
+    return { orders: [], payments: [] };
+  }
+}

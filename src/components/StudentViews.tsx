@@ -417,24 +417,50 @@ export const StudentOrderHistoryView: React.FC<OrderHistoryViewProps> = ({
                     </span>
                   </div>
 
-                  <span
-                    className={`px-3 py-1 rounded-xl text-xs font-extrabold flex items-center gap-1 ${
-                      isFailed
-                        ? 'bg-nesty-errorBg text-nesty-error border border-nesty-error'
-                        : isClaimed
-                        ? 'bg-nesty-successBg text-nesty-success border border-nesty-success'
-                        : 'bg-nesty-goldLight text-nesty-burgundyDark border border-nesty-gold'
-                    }`}
-                  >
-                    {isFailed ? (
-                      <XCircle className="w-3.5 h-3.5" />
-                    ) : isClaimed ? (
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                    ) : (
-                      <Clock className="w-3.5 h-3.5" />
-                    )}
-                    <span>{order.orderStatus}</span>
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {/* Bill Status: ACTIVE (green) / EXPIRED (red) */}
+                    <span
+                      data-testid={`bill_status_badge_${order.id}`}
+                      className={`px-3 py-1 rounded-xl text-xs font-black tracking-wider uppercase flex items-center gap-1.5 shadow-sm ${
+                        (order.billStatus || (isClaimed ? 'EXPIRED' : 'ACTIVE')) === 'EXPIRED'
+                          ? 'bg-red-600 text-white border border-red-700'
+                          : 'bg-emerald-600 text-white border border-emerald-700'
+                      }`}
+                      title={
+                        (order.billStatus || (isClaimed ? 'EXPIRED' : 'ACTIVE')) === 'EXPIRED'
+                          ? 'Bill collected from vending machine'
+                          : 'Bill not yet collected from vending machine'
+                      }
+                    >
+                      <span
+                        className={`w-2 h-2 rounded-full ${
+                          (order.billStatus || (isClaimed ? 'EXPIRED' : 'ACTIVE')) === 'EXPIRED'
+                            ? 'bg-white'
+                            : 'bg-emerald-200 animate-pulse'
+                        }`}
+                      />
+                      <span>BILL: {(order.billStatus || (isClaimed ? 'EXPIRED' : 'ACTIVE'))}</span>
+                    </span>
+
+                    <span
+                      className={`px-3 py-1 rounded-xl text-xs font-extrabold flex items-center gap-1 ${
+                        isFailed
+                          ? 'bg-nesty-errorBg text-nesty-error border border-nesty-error'
+                          : isClaimed
+                          ? 'bg-nesty-successBg text-nesty-success border border-nesty-success'
+                          : 'bg-nesty-goldLight text-nesty-burgundyDark border border-nesty-gold'
+                      }`}
+                    >
+                      {isFailed ? (
+                        <XCircle className="w-3.5 h-3.5" />
+                      ) : isClaimed ? (
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                      ) : (
+                        <Clock className="w-3.5 h-3.5" />
+                      )}
+                      <span>{order.orderStatus}</span>
+                    </span>
+                  </div>
                 </div>
 
                 <div className="text-sm font-bold text-nesty-textPrimary">
@@ -526,7 +552,41 @@ export const StudentPaymentHistoryView: React.FC<PaymentHistoryViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Bill Status: ACTIVE (green) / EXPIRED (red) */}
+                    {(() => {
+                      const effectiveBillStatus =
+                        pmt.billStatus ||
+                        (matchedOrder?.billStatus
+                          ? matchedOrder.billStatus
+                          : matchedOrder?.orderStatus === 'CLAIMED'
+                          ? 'EXPIRED'
+                          : 'ACTIVE');
+                      const isExpired = effectiveBillStatus === 'EXPIRED';
+                      return (
+                        <span
+                          data-testid={`payment_bill_status_badge_${pmt.id}`}
+                          className={`px-3 py-1 rounded-xl text-xs font-black tracking-wider uppercase flex items-center gap-1.5 shadow-sm ${
+                            isExpired
+                              ? 'bg-red-600 text-white border border-red-700'
+                              : 'bg-emerald-600 text-white border border-emerald-700'
+                          }`}
+                          title={
+                            isExpired
+                              ? 'Bill collected from vending machine'
+                              : 'Bill not yet collected from vending machine'
+                          }
+                        >
+                          <span
+                            className={`w-2 h-2 rounded-full ${
+                              isExpired ? 'bg-white' : 'bg-emerald-200 animate-pulse'
+                            }`}
+                          />
+                          <span>BILL: {effectiveBillStatus}</span>
+                        </span>
+                      );
+                    })()}
+
                     <span
                       className={`px-3 py-1 rounded-xl text-xs font-extrabold ${
                         isPaid

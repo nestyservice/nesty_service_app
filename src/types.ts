@@ -37,6 +37,8 @@ export interface OrderRecord {
   razorpayOrderId?: string | null;
   paymentStatus: 'PAID' | 'SUCCESS' | 'FAILED' | 'PENDING';
   orderStatus: 'PENDING_PICKUP' | 'PREPARING' | 'READY' | 'CLAIMED' | 'CANCELLED';
+  billStatus?: 'ACTIVE' | 'EXPIRED';
+  billCollectedAt?: string | null;
   pickupToken?: string;
   failureReason?: string;
   claimedBy?: string | null;
@@ -55,6 +57,8 @@ export interface PaymentRecord {
   transactionId: string;
   razorpayOrderId?: string | null;
   status: 'PAID' | 'SUCCESS' | 'FAILED' | 'PENDING';
+  billStatus?: 'ACTIVE' | 'EXPIRED';
+  billCollectedAt?: string | null;
   failureReason?: string;
   createdAt: string;
 }

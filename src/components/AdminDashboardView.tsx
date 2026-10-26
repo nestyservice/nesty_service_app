@@ -851,6 +851,15 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         <span className="px-2.5 py-0.5 rounded-lg bg-nesty-goldLight border border-nesty-gold text-[11px] font-extrabold text-nesty-burgundyDark">
                           Order: {order.orderStatus}
                         </span>
+                        <span
+                          className={`px-2.5 py-0.5 rounded-lg text-[11px] font-extrabold ${
+                            (order.billStatus || (order.orderStatus === 'CLAIMED' ? 'EXPIRED' : 'ACTIVE')) === 'EXPIRED'
+                              ? 'bg-red-600 text-white border border-red-700'
+                              : 'bg-emerald-600 text-white border border-emerald-700'
+                          }`}
+                        >
+                          Bill: {order.billStatus || (order.orderStatus === 'CLAIMED' ? 'EXPIRED' : 'ACTIVE')}
+                        </span>
                       </div>
 
                       <div className="text-sm font-extrabold text-nesty-textPrimary">
