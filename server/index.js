@@ -290,26 +290,54 @@ export function getCurrentlyActiveBillCodes(db) {
       o.orderStatus !== 'CANCELLED' &&
       (o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS')
     ) {
-      activeCodes.add(o.billCode.toString().trim());
+      activeCodes.add(o.billCode.toString().trim().toUpperCase());
     }
   }
   return activeCodes;
 }
 
+const CHAR_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const CHAR_DIGITS = '0123456789';
+const CHAR_ALL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+export const BILL_CODE_REGEX = /^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{3}$/;
+
+export function isValidBillCode(code) {
+  if (typeof code !== 'string') return false;
+  return BILL_CODE_REGEX.test(code.trim().toUpperCase());
+}
+
+export function generateRandomAlphanumeric3() {
+  const letter = CHAR_LETTERS[crypto.randomInt(0, CHAR_LETTERS.length)];
+  const digit = CHAR_DIGITS[crypto.randomInt(0, CHAR_DIGITS.length)];
+  const third = CHAR_ALL[crypto.randomInt(0, CHAR_ALL.length)];
+  const chars = [letter, digit, third];
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(0, i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join('');
+}
+
 export function generateReusableBillCode(activeCodes = new Set()) {
-  for (let attempt = 0; attempt < 2000; attempt++) {
-    const candidate = crypto.randomInt(10001, 100000).toString();
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    const candidate = generateRandomAlphanumeric3();
     if (!activeCodes.has(candidate)) {
       return candidate;
     }
   }
-  for (let num = 10001; num <= 99999; num++) {
-    const candidate = num.toString();
-    if (!activeCodes.has(candidate)) {
-      return candidate;
+
+  for (let i = 0; i < CHAR_ALL.length; i++) {
+    for (let j = 0; j < CHAR_ALL.length; j++) {
+      for (let k = 0; k < CHAR_ALL.length; k++) {
+        const candidate = CHAR_ALL[i] + CHAR_ALL[j] + CHAR_ALL[k];
+        if (BILL_CODE_REGEX.test(candidate) && !activeCodes.has(candidate)) {
+          return candidate;
+        }
+      }
     }
   }
-  return crypto.randomInt(10000, 100000).toString();
+
+  return generateRandomAlphanumeric3();
 }
 
 // Test helper export for automated verification runner
@@ -3004,13 +3032,24 @@ app.post('/api/pos/verify-order', (req, res) => {
   const cleanCode = rawCode.toUpperCase().replace(/^NESTY:ORDER:/, '').replace(/^ORDER:/, '').trim();
 
   if (!cleanCode) {
-    return res.status(400).json({ success: false, message: 'Please enter a valid Bill Code, Token, or Order ID.' });
+    return res.status(400).json({ success: false, message: 'Please enter a bill code.' });
+  }
+
+  // Validate 3-character format (allow order IDs and pickup tokens if entered)
+  const isOrderIdOrToken = cleanCode.startsWith('ORD_') || cleanCode.startsWith('T-') || cleanCode.startsWith('TXN_');
+  if (!isOrderIdOrToken) {
+    if (cleanCode.length !== 3) {
+      return res.status(400).json({ success: false, message: 'Bill code must contain exactly 3 characters.' });
+    }
+    if (!BILL_CODE_REGEX.test(cleanCode)) {
+      return res.status(400).json({ success: false, message: 'Bill code must contain both a letter and a number.' });
+    }
   }
 
   // 1. Look for ACTIVE, PAID, UNCLAIMED order matching this code
   const activeOrder = (db.orders || []).find((o) => {
     const isCodeMatch =
-      (o.billCode && o.billCode.toString().trim() === rawCode.trim()) ||
+      (o.billCode && o.billCode.toString().trim().toUpperCase() === cleanCode) ||
       (o.pickupToken && o.pickupToken.toString().trim().toUpperCase() === cleanCode) ||
       (o.id && o.id.toString().trim().toUpperCase() === cleanCode) ||
       (o.transactionId && o.transactionId.toString().trim() === rawCode.trim());
@@ -3051,7 +3090,7 @@ app.post('/api/pos/verify-order', (req, res) => {
       success: false,
       code: 'ALREADY_PRINTED',
       isEligibleForPrint: false,
-      message: `Order #${expiredOrder.id} (Code: ${cleanCode}) was already printed and collected on ${expiredOrder.printedAt || expiredOrder.billCollectedAt || expiredOrder.claimedAt || 'earlier'}.`,
+      message: 'Order has already been processed.',
       order: expiredOrder,
     });
   }

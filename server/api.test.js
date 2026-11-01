@@ -1480,7 +1480,7 @@ test('NESTY Complete End-to-End System Verification Suite (Requirements 1-11)', 
   // -------------------------------------------------------------------------
   // POS TESTS (Model 1008 Handheld Terminal & Immediate Reusable Bill Code)
   // -------------------------------------------------------------------------
-  await t.test('POS-T1: Placing a paid order assigns a 5-digit billCode alongside pickupToken', async () => {
+  await t.test('POS-T1: Placing a paid order assigns a 3-character alphanumeric billCode', async () => {
     const orderRes = await requestJson(
       server,
       'POST',
@@ -1497,9 +1497,34 @@ test('NESTY Complete End-to-End System Verification Suite (Requirements 1-11)', 
       { Authorization: `Bearer ${createdToken}` }
     );
     assert.equal(orderRes.status, 200);
-    assert.ok(orderRes.data.order.billCode, 'Order should have a billCode');
-    assert.match(orderRes.data.order.billCode, /^\d{5}$/, 'billCode must be 5 digits');
+    const code = orderRes.data.order.billCode;
+    assert.ok(code, 'Order should have a billCode');
+    assert.equal(code.length, 3, 'billCode must be exactly 3 characters');
+    assert.match(code, /^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{3}$/, 'billCode must contain at least one letter and at least one digit');
     assert.equal(orderRes.data.order.billStatus, 'ACTIVE');
+
+    // Test validation error responses on /api/pos/verify-order
+    const emptyRes = await requestJson(server, 'POST', '/api/pos/verify-order', { code: '' });
+    assert.equal(emptyRes.status, 400);
+    assert.equal(emptyRes.data.message, 'Please enter a bill code.');
+
+    const wrongLenRes = await requestJson(server, 'POST', '/api/pos/verify-order', { code: 'A1' });
+    assert.equal(wrongLenRes.status, 400);
+    assert.equal(wrongLenRes.data.message, 'Bill code must contain exactly 3 characters.');
+
+    const onlyLettersRes = await requestJson(server, 'POST', '/api/pos/verify-order', { code: 'ABC' });
+    assert.equal(onlyLettersRes.status, 400);
+    assert.equal(onlyLettersRes.data.message, 'Bill code must contain both a letter and a number.');
+
+    const onlyDigitsRes = await requestJson(server, 'POST', '/api/pos/verify-order', { code: '123' });
+    assert.equal(onlyDigitsRes.status, 400);
+    assert.equal(onlyDigitsRes.data.message, 'Bill code must contain both a letter and a number.');
+
+    // Lowercase auto-convert test
+    const lowerRes = await requestJson(server, 'POST', '/api/pos/verify-order', { code: code.toLowerCase() });
+    assert.equal(lowerRes.status, 200);
+    assert.equal(lowerRes.data.success, true);
+    assert.equal(lowerRes.data.order.id, orderRes.data.order.id);
   });
 
   await t.test('POS-T2: POS operator login succeeds with valid operator or admin credentials', async () => {

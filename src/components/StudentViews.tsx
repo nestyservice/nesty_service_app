@@ -367,29 +367,85 @@ export const StudentOrderHistoryView: React.FC<OrderHistoryViewProps> = ({
   orders,
   onOpenOrderDetails,
 }) => {
+  const [historyTab, setHistoryTab] = useState<'ACTIVE' | 'EXPIRED' | 'ALL'>('ACTIVE');
+
+  const activeList = orders.filter(
+    (o) => (o.billStatus || (o.orderStatus === 'CLAIMED' ? 'EXPIRED' : 'ACTIVE')) !== 'EXPIRED'
+  );
+  const expiredList = orders.filter(
+    (o) => (o.billStatus || (o.orderStatus === 'CLAIMED' ? 'EXPIRED' : 'ACTIVE')) === 'EXPIRED'
+  );
+
+  const displayedList =
+    historyTab === 'ACTIVE' ? activeList : historyTab === 'EXPIRED' ? expiredList : orders;
+
   return (
     <div data-testid="student_order_history_screen" className="space-y-4 pb-24 md:pb-8">
-      <div className="bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-5 flex items-center justify-between">
+      <div className="bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-extrabold text-nesty-burgundy">Order History</h2>
+          <h2 className="text-xl font-extrabold text-nesty-burgundy">Order History & Bills</h2>
           <p className="text-xs text-nesty-textSecondary mt-0.5">
-            Track your canteen orders. Click any order to open and print your official bill/receipt.
+            Active orders show your 3-character Bill Code for POS pickup. Expired orders preserve your full receipt history.
           </p>
         </div>
-        <Receipt className="w-8 h-8 text-nesty-goldDark shrink-0" />
+        <div className="flex flex-wrap items-center gap-1.5 p-1 bg-nesty-cream border border-nesty-gold/40 rounded-2xl self-start md:self-auto">
+          <button
+            type="button"
+            onClick={() => setHistoryTab('ACTIVE')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition ${
+              historyTab === 'ACTIVE'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'text-nesty-textSecondary hover:text-nesty-burgundy'
+            }`}
+          >
+            Active Orders ({activeList.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setHistoryTab('EXPIRED')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition ${
+              historyTab === 'EXPIRED'
+                ? 'bg-red-600 text-white shadow-sm'
+                : 'text-nesty-textSecondary hover:text-nesty-burgundy'
+            }`}
+          >
+            Expired Orders History ({expiredList.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setHistoryTab('ALL')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition ${
+              historyTab === 'ALL'
+                ? 'bg-nesty-burgundy text-white shadow-sm'
+                : 'text-nesty-textSecondary hover:text-nesty-burgundy'
+            }`}
+          >
+            All ({orders.length})
+          </button>
+        </div>
       </div>
 
-      {orders.length === 0 ? (
+      {displayedList.length === 0 ? (
         <div className="bg-nesty-creamSurface border border-nesty-creamBorder rounded-3xl p-12 text-center">
           <Receipt className="w-12 h-12 text-nesty-goldDark mx-auto mb-2" />
-          <h3 className="text-base font-extrabold text-nesty-burgundy">No orders placed yet</h3>
+          <h3 className="text-base font-extrabold text-nesty-burgundy">
+            {historyTab === 'ACTIVE'
+              ? 'No active orders pending pickup'
+              : historyTab === 'EXPIRED'
+              ? 'No expired orders in history'
+              : 'No orders placed yet'}
+          </h3>
           <p className="text-xs text-nesty-textSecondary mt-1">
-            Your confirmed canteen orders and pickup statuses will appear here.
+            {historyTab === 'ACTIVE'
+              ? 'Place an order to receive your 3-character Bill Code.'
+              : historyTab === 'EXPIRED'
+              ? 'Printed counter receipts will be permanently archived here.'
+              : 'Your confirmed canteen orders will appear here.'}
           </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {orders.map((order) => {
+          {displayedList.map((order) => {
             const isClaimed = order.orderStatus === 'CLAIMED';
             const isFailed = order.paymentStatus === 'FAILED';
             return (
