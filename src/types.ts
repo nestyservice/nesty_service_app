@@ -39,7 +39,11 @@ export interface OrderRecord {
   orderStatus: 'PENDING_PICKUP' | 'PREPARING' | 'READY' | 'CLAIMED' | 'CANCELLED';
   billStatus?: 'ACTIVE' | 'EXPIRED';
   billCollectedAt?: string | null;
+  billCode?: string;
   pickupToken?: string;
+  billCode?: string;
+  printedAt?: string | null;
+  printedBy?: string | null;
   failureReason?: string;
   claimedBy?: string | null;
   claimedAt?: string | null;
@@ -59,6 +63,7 @@ export interface PaymentRecord {
   status: 'PAID' | 'SUCCESS' | 'FAILED' | 'PENDING';
   billStatus?: 'ACTIVE' | 'EXPIRED';
   billCollectedAt?: string | null;
+  billCode?: string;
   failureReason?: string;
   createdAt: string;
 }

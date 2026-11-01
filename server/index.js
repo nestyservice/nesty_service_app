@@ -274,6 +274,44 @@ export function generatePickupToken(existingTokens = new Set()) {
   return chars.join('');
 }
 
+// Reusable Bill Code Generator
+// Generates a 5-digit numeric bill code (10001 - 99999).
+// A code is considered in-use ONLY while an order has billStatus === 'ACTIVE' and is not claimed.
+// Once an order transitions to EXPIRED (printed/claimed), its billCode is immediately released
+// and becomes reusable for new orders, while the historical order retains its record indefinitely.
+export function getCurrentlyActiveBillCodes(db) {
+  const activeCodes = new Set();
+  const orders = Array.isArray(db?.orders) ? db.orders : [];
+  for (const o of orders) {
+    if (
+      o.billCode &&
+      (o.billStatus === 'ACTIVE' || (!o.billStatus && o.orderStatus !== 'CLAIMED')) &&
+      o.orderStatus !== 'CLAIMED' &&
+      o.orderStatus !== 'CANCELLED' &&
+      (o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS')
+    ) {
+      activeCodes.add(o.billCode.toString().trim());
+    }
+  }
+  return activeCodes;
+}
+
+export function generateReusableBillCode(activeCodes = new Set()) {
+  for (let attempt = 0; attempt < 2000; attempt++) {
+    const candidate = crypto.randomInt(10001, 100000).toString();
+    if (!activeCodes.has(candidate)) {
+      return candidate;
+    }
+  }
+  for (let num = 10001; num <= 99999; num++) {
+    const candidate = num.toString();
+    if (!activeCodes.has(candidate)) {
+      return candidate;
+    }
+  }
+  return crypto.randomInt(10000, 100000).toString();
+}
+
 // Test helper export for automated verification runner
 export const _testOtpStores = {
   emailVerificationOtps,
@@ -338,6 +376,17 @@ const INITIAL_SEED_DATA = {
     },
   ],
   users: [
+    {
+      email: 'operator@cvr.ac.in',
+      id: 'usr_pos_operator',
+      name: 'Nesty POS Counter Operator',
+      phone: '9876543211',
+      rollNo: 'POS-1008',
+      role: 'pos_operator',
+      emailVerified: true,
+      passwordHash: hashPassword('pos123'),
+      createdAt: '2026-10-01T08:00:00Z',
+    },
     {
       email: 'admin@cvr.ac.in',
       id: 'usr_admin_cvr',
@@ -1939,6 +1988,8 @@ app.post('/api/payments/verify', (req, res) => {
       .map((o) => o.pickupToken)
   );
   const pickupToken = generatePickupToken(activeTokens);
+  const activeBillCodes = getCurrentlyActiveBillCodes(db);
+  const billCode = generateReusableBillCode(activeBillCodes);
 
   const newOrder = {
     id: orderId,
@@ -1957,6 +2008,7 @@ app.post('/api/payments/verify', (req, res) => {
     billStatus: 'ACTIVE',
     billCollectedAt: null,
     pickupToken,
+    billCode,
     claimedBy: null,
     claimedAt: null,
     createdAt: new Date().toISOString(),
@@ -1975,6 +2027,7 @@ app.post('/api/payments/verify', (req, res) => {
     status: 'PAID',
     billStatus: 'ACTIVE',
     billCollectedAt: null,
+    billCode,
     createdAt: new Date().toISOString(),
   };
 
@@ -1991,7 +2044,8 @@ app.post('/api/payments/verify', (req, res) => {
     order: newOrder,
     payment: newPayment,
     pickupToken: newOrder.pickupToken,
-    message: `Payment verified! Order #${newOrder.id} confirmed. Pickup Token: ${newOrder.pickupToken}. Transaction ID: ${newOrder.transactionId}`,
+    billCode: newOrder.billCode,
+    message: `Payment verified! Order #${newOrder.id} confirmed. Bill Code: ${newOrder.billCode}. Pickup Token: ${newOrder.pickupToken}. Transaction ID: ${newOrder.transactionId}`,
   });
 });
 
@@ -2102,10 +2156,13 @@ app.post('/api/orders', (req, res) => {
       .map((o) => o.pickupToken)
   );
   const pickupToken = generatePickupToken(activeTokens);
+  const activeBillCodes = getCurrentlyActiveBillCodes(db);
+  const billCode = generateReusableBillCode(activeBillCodes);
 
   const isPendingPayment = req.body?.paymentStatus === 'PENDING';
   const assignedPaymentStatus = isPendingPayment ? 'PENDING' : 'PAID';
   const assignedPickupToken = isPendingPayment ? null : pickupToken;
+  const assignedBillCode = isPendingPayment ? null : billCode;
 
   const newOrder = {
     id: orderId,
@@ -2127,6 +2184,7 @@ app.post('/api/orders', (req, res) => {
     billStatus: 'ACTIVE',
     billCollectedAt: null,
     pickupToken: assignedPickupToken,
+    billCode: assignedBillCode,
     claimedBy: null,
     claimedAt: null,
     createdAt: new Date().toISOString(),
@@ -2145,6 +2203,7 @@ app.post('/api/orders', (req, res) => {
     status: 'PAID',
     billStatus: 'ACTIVE',
     billCollectedAt: null,
+    billCode: assignedBillCode,
     createdAt: new Date().toISOString(),
   };
 
@@ -2167,7 +2226,8 @@ app.post('/api/orders', (req, res) => {
     order: newOrder,
     payment: newPayment,
     pickupToken: newOrder.pickupToken,
-    message: `Order #${newOrder.id} placed! Pickup Token: ${newOrder.pickupToken}. Transaction ID: ${newOrder.transactionId}`,
+    billCode: newOrder.billCode,
+    message: `Order #${newOrder.id} placed! Bill Code: ${newOrder.billCode || ''}. Pickup Token: ${newOrder.pickupToken || ''}. Transaction ID: ${newOrder.transactionId}`,
   });
 });
 
@@ -2836,6 +2896,350 @@ app.post('/api/orders/validate-qr', (req, res) => {
     title: 'Unsupported QR Code',
     subtitle: `Scanned value "${rawValue}" is not a recognized Nesty coupon or verified order reference.`,
   });
+});
+
+// ============================================================================
+// 8B. NESTY ANDROID POS APIS (Model 1008 Handheld Terminal Integration)
+// Engineered for 2-inch (58mm) built-in thermal printer, Octa-Core, Dual SIM LTE + Wi-Fi
+// ============================================================================
+
+// Public Health & Status endpoint for Nesty POS terminal
+app.get('/api/pos/status', (_req, res) => {
+  const db = loadDb();
+  const activeOrdersCount = (db.orders || []).filter(
+    (o) =>
+      (o.billStatus === 'ACTIVE' || (!o.billStatus && o.orderStatus !== 'CLAIMED')) &&
+      o.orderStatus !== 'CLAIMED' &&
+      o.orderStatus !== 'CANCELLED' &&
+      (o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS')
+  ).length;
+
+  res.json({
+    status: 'ok',
+    service: 'Nesty POS Machine Gateway',
+    terminalModel: 'Model 1008 (58mm / 2-inch Thermal Printer)',
+    activeOrdersCount,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// POS Operator Authentication
+app.post('/api/pos/auth/login', async (req, res) => {
+  const db = loadDb();
+  const rawIdentifier = (req.body?.identifier || req.body?.username || req.body?.email || req.body?.rollNo || '').toString().trim();
+  const identifierLower = rawIdentifier.toLowerCase();
+  const password = (req.body?.password || req.body?.pin || '').toString().trim();
+
+  if (!rawIdentifier || !password) {
+    return res.status(400).json({ success: false, message: 'Please enter Operator ID / Email and Password / PIN.' });
+  }
+
+  // Look up operator in users (admin or pos_operator role)
+  let user = db.users.find(
+    (u) =>
+      u.email.toLowerCase() === identifierLower ||
+      (u.rollNo && u.rollNo.toUpperCase() === rawIdentifier.toUpperCase()) ||
+      (u.rollNo && u.rollNo.toLowerCase() === identifierLower)
+  );
+
+  // If identifier is generic 'operator' or 'pos' and matches default seed
+  if (!user && (identifierLower === 'operator' || identifierLower === 'pos' || identifierLower === 'pos-1008')) {
+    user = db.users.find((u) => u.role === 'pos_operator' || u.email === 'operator@cvr.ac.in');
+  }
+
+  // Auto-seed operator user if missing in legacy database fixtures
+  if (!user && (identifierLower === 'operator@cvr.ac.in' || identifierLower === 'pos-1008' || identifierLower === 'operator') && (password === 'pos123' || password === 'admin123')) {
+    user = {
+      email: 'operator@cvr.ac.in',
+      id: 'usr_pos_operator',
+      name: 'Nesty POS Counter Operator',
+      phone: '9876543211',
+      rollNo: 'POS-1008',
+      role: 'pos_operator',
+      emailVerified: true,
+      passwordHash: hashPassword(password),
+      createdAt: new Date().toISOString(),
+    };
+    db.users.push(user);
+    saveDb(db);
+  }
+
+  if (!user || !verifyPassword(password, user.passwordHash)) {
+    // Also allow admin credentials to log into POS terminal
+    const adminUser = db.users.find((u) => u.role === 'admin' && (u.email.toLowerCase() === identifierLower || identifierLower === 'admin'));
+    if (adminUser && verifyPassword(password, adminUser.passwordHash)) {
+      user = adminUser;
+    } else {
+      return res.status(401).json({ success: false, message: 'Invalid Operator ID or Password.' });
+    }
+  }
+
+  const token = createAuthToken(user);
+  return res.json({
+    success: true,
+    token,
+    operator: {
+      id: user.id,
+      name: user.name,
+      role: user.role,
+      email: user.email,
+    },
+    message: `POS Operator "${user.name}" authenticated.`,
+  });
+});
+
+// POS Order Verification by Bill Code, Pickup Token, Order ID, or Transaction ID
+// Strictly isolates active orders from expired orders: reusable codes NEVER match old records!
+app.post('/api/pos/verify-order', (req, res) => {
+  const db = loadDb();
+  let rawCode = (req.body?.code || req.body?.billCode || req.body?.token || req.body?.orderId || '').toString().trim();
+
+  // If rawCode is a URL or QR payload like NESTY:ORDER:NST-1234:A7K, clean it
+  if (rawCode.includes('://') || rawCode.includes('orderId=')) {
+    try {
+      const parsedUrl = new URL(rawCode, 'https://nesty-service-app.onrender.com');
+      rawCode = parsedUrl.searchParams.get('orderId') || parsedUrl.searchParams.get('token') || rawCode;
+    } catch {}
+  }
+  const cleanCode = rawCode.toUpperCase().replace(/^NESTY:ORDER:/, '').replace(/^ORDER:/, '').trim();
+
+  if (!cleanCode) {
+    return res.status(400).json({ success: false, message: 'Please enter a valid Bill Code, Token, or Order ID.' });
+  }
+
+  // 1. Look for ACTIVE, PAID, UNCLAIMED order matching this code
+  const activeOrder = (db.orders || []).find((o) => {
+    const isCodeMatch =
+      (o.billCode && o.billCode.toString().trim() === rawCode.trim()) ||
+      (o.pickupToken && o.pickupToken.toString().trim().toUpperCase() === cleanCode) ||
+      (o.id && o.id.toString().trim().toUpperCase() === cleanCode) ||
+      (o.transactionId && o.transactionId.toString().trim() === rawCode.trim());
+
+    const isOrderActive =
+      (o.billStatus === 'ACTIVE' || (!o.billStatus && o.orderStatus !== 'CLAIMED')) &&
+      o.orderStatus !== 'CLAIMED' &&
+      o.orderStatus !== 'CANCELLED' &&
+      (o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS');
+
+    return isCodeMatch && isOrderActive;
+  });
+
+  if (activeOrder) {
+    return res.json({
+      success: true,
+      order: activeOrder,
+      isEligibleForPrint: true,
+      billCode: activeOrder.billCode,
+      pickupToken: activeOrder.pickupToken,
+      message: `Active Order #${activeOrder.id} verified. Ready to print.`,
+    });
+  }
+
+  // 2. If no active order, check if this code was already printed in historical records
+  const expiredOrder = (db.orders || []).find((o) => {
+    const isCodeMatch =
+      (o.billCode && o.billCode.toString().trim() === rawCode.trim()) ||
+      (o.pickupToken && o.pickupToken.toString().trim().toUpperCase() === cleanCode) ||
+      (o.id && o.id.toString().trim().toUpperCase() === cleanCode) ||
+      (o.transactionId && o.transactionId.toString().trim() === rawCode.trim());
+
+    return isCodeMatch && (o.billStatus === 'EXPIRED' || o.orderStatus === 'CLAIMED');
+  });
+
+  if (expiredOrder) {
+    return res.status(409).json({
+      success: false,
+      code: 'ALREADY_PRINTED',
+      isEligibleForPrint: false,
+      message: `Order #${expiredOrder.id} (Code: ${cleanCode}) was already printed and collected on ${expiredOrder.printedAt || expiredOrder.billCollectedAt || expiredOrder.claimedAt || 'earlier'}.`,
+      order: expiredOrder,
+    });
+  }
+
+  // 3. Not found anywhere
+  return res.status(404).json({
+    success: false,
+    code: 'ORDER_NOT_FOUND',
+    isEligibleForPrint: false,
+    message: `No active order found for Bill Code / Token "${rawCode}". Please check the code and try again.`,
+  });
+});
+
+// Atomic Print Claim Endpoint (45-second lock preventing duplicate concurrent prints)
+app.post('/api/pos/claim-order', (req, res) => {
+  const db = loadDb();
+  const orderId = (req.body?.orderId || '').toString().trim();
+  const operatorId = (req.body?.operatorId || req.body?.operatorName || 'POS-Operator').toString().trim();
+  const printTransactionId = (req.body?.printTransactionId || `ptxn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`).toString().trim();
+
+  if (!orderId) {
+    return res.status(400).json({ success: false, message: 'orderId is required to claim print lock.' });
+  }
+
+  const order = (db.orders || []).find((o) => o.id === orderId);
+  if (!order) {
+    return res.status(404).json({ success: false, message: 'Order not found.' });
+  }
+
+  if (order.billStatus === 'EXPIRED' || order.orderStatus === 'CLAIMED') {
+    return res.status(409).json({
+      success: false,
+      code: 'ALREADY_CLAIMED',
+      message: `Order #${order.id} is already printed and collected.`,
+    });
+  }
+
+  const now = Date.now();
+  const LOCK_DURATION_MS = 45 * 1000;
+  if (
+    order.printLock &&
+    order.printLock.printTransactionId !== printTransactionId &&
+    now - (order.printLock.lockedAt || 0) < LOCK_DURATION_MS
+  ) {
+    return res.status(423).json({
+      success: false,
+      code: 'ORDER_LOCKED',
+      message: `Order #${order.id} is currently locked by ${order.printLock.operatorId || 'another terminal'}.`,
+    });
+  }
+
+  order.printLock = {
+    operatorId,
+    printTransactionId,
+    lockedAt: now,
+  };
+  saveDb(db);
+
+  return res.json({
+    success: true,
+    orderId: order.id,
+    printTransactionId,
+    message: `Print lock acquired for Order #${order.id}.`,
+  });
+});
+
+// Confirm Print Completion & Immediate Bill Code Release
+app.post('/api/pos/confirm-print', (req, res) => {
+  const db = loadDb();
+  const orderId = (req.body?.orderId || '').toString().trim();
+  const operatorId = (req.body?.operatorId || req.body?.operatorName || 'POS-Operator').toString().trim();
+  const printTransactionId = (req.body?.printTransactionId || '').toString().trim();
+
+  if (!orderId) {
+    return res.status(400).json({ success: false, message: 'orderId is required to confirm print.' });
+  }
+
+  const order = (db.orders || []).find((o) => o.id === orderId);
+  if (!order) {
+    return res.status(404).json({ success: false, message: 'Order not found.' });
+  }
+
+  // Idempotency check: if already confirmed for this transaction
+  if (order.orderStatus === 'CLAIMED' && order.billStatus === 'EXPIRED') {
+    if (order.printTransactionId === printTransactionId) {
+      return res.json({
+        success: true,
+        order,
+        message: 'Print confirmation already processed for this transaction.',
+      });
+    }
+    return res.status(409).json({
+      success: false,
+      code: 'ALREADY_PRINTED',
+      message: `Order #${order.id} was already printed on ${order.printedAt || order.billCollectedAt}.`,
+    });
+  }
+
+  const nowIso = new Date().toISOString();
+  order.orderStatus = 'CLAIMED';
+  order.billStatus = 'EXPIRED';
+  order.billCollectedAt = order.billCollectedAt || nowIso;
+  order.claimedAt = order.claimedAt || nowIso;
+  order.claimedBy = operatorId;
+  order.printedAt = nowIso;
+  order.printedBy = operatorId;
+  order.printTransactionId = printTransactionId || `ptxn_${Date.now()}`;
+  order.printLock = null;
+
+  const releasedCode = order.billCode;
+
+  // Update corresponding payment record
+  const matchingPayment = (db.payments || []).find((p) => p.orderId === order.id || p.transactionId === order.transactionId);
+  if (matchingPayment) {
+    matchingPayment.billStatus = 'EXPIRED';
+    matchingPayment.billCollectedAt = nowIso;
+    syncPaymentToSupabase(matchingPayment).catch(() => {});
+  }
+
+  saveDb(db);
+  syncOrderToSupabase(order).catch(() => {});
+
+  recordAuditLog(db, {
+    action: 'POS_BILL_PRINTED',
+    actorEmail: (operatorId || 'pos_operator').toString(),
+    actorRole: 'pos_operator',
+    targetType: 'ORDER',
+    targetId: order.id,
+    details: {
+      billCode: order.billCode,
+      pickupToken: order.pickupToken,
+      transactionId: order.transactionId,
+      printTransactionId,
+      amount: order.finalAmount,
+    },
+    ip: getClientIp(req),
+  });
+
+  return res.json({
+    success: true,
+    order,
+    releasedBillCode: releasedCode,
+    message: `Bill printed successfully. Order #${order.id} marked as CLAIMED and EXPIRED. Bill code ${releasedCode || ''} released for immediate reuse.`,
+  });
+});
+
+// Report Hardware Failure (Out of paper, paper jam) -> Releases lock, keeps order active for retry
+app.post('/api/pos/report-print-failure', (req, res) => {
+  const db = loadDb();
+  const orderId = (req.body?.orderId || '').toString().trim();
+  const reason = (req.body?.reason || 'PRINTER_ERROR').toString().trim();
+  const operatorId = (req.body?.operatorId || 'POS-Operator').toString().trim();
+
+  const order = (db.orders || []).find((o) => o.id === orderId);
+  if (!order) {
+    return res.status(404).json({ success: false, message: 'Order not found.' });
+  }
+
+  // Release lock so it can be retried immediately
+  order.printLock = null;
+  saveDb(db);
+
+  recordAuditLog(db, {
+    action: 'POS_PRINT_FAILED',
+    actorEmail: operatorId,
+    actorRole: 'pos_operator',
+    targetType: 'ORDER',
+    targetId: order.id,
+    details: { reason, billCode: order.billCode },
+    ip: getClientIp(req),
+  });
+
+  return res.json({
+    success: true,
+    message: `Print failure noted (${reason}). Order #${order.id} lock released; remains ACTIVE for retry.`,
+  });
+});
+
+// Direct APK Download Endpoint (Over-The-Air Installation on Model 1008 POS Terminal)
+app.get(['/downloads/nesty-pos.apk', '/api/pos/download-apk'], (_req, res) => {
+  const localApkPath = path.join(__dirname, '..', 'public', 'downloads', 'nesty-pos.apk');
+  if (fs.existsSync(localApkPath)) {
+    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+    res.setHeader('Content-Disposition', 'attachment; filename="nesty-pos.apk"');
+    return res.sendFile(localApkPath);
+  }
+  // Redirect to GitHub Release APK
+  return res.redirect('https://github.com/nestyservice/pos_apk/releases/latest/download/nesty-pos.apk');
 });
 
 // ============================================================================

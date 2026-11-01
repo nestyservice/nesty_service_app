@@ -412,6 +412,14 @@ export const StudentOrderHistoryView: React.FC<OrderHistoryViewProps> = ({
                         TOKEN: {order.pickupToken}
                       </span>
                     )}
+                    {order.billCode && (
+                      <span
+                        data-testid={`student_order_bill_code_${order.id}`}
+                        className="px-3 py-1 rounded-xl bg-amber-500 text-white border border-amber-600 text-xs font-black tracking-widest shadow-sm"
+                      >
+                        BILL CODE: {order.billCode}
+                      </span>
+                    )}
                     <span className="px-2.5 py-1 rounded-xl bg-nesty-creamElevated border border-nesty-gold text-xs font-bold text-nesty-burgundy">
                       Canteen Counter Pickup
                     </span>

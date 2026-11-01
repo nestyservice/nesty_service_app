@@ -9,6 +9,8 @@ import {
   app,
   _testOtpStores,
   generatePickupToken,
+  getCurrentlyActiveBillCodes,
+  generateReusableBillCode,
   validateProductionSecrets,
   INSECURE_DEFAULT_JWT_SECRET,
   INSECURE_DEFAULT_ADMIN_PASSWORD,
@@ -1473,6 +1475,199 @@ test('NESTY Complete End-to-End System Verification Suite (Requirements 1-11)', 
     assert.equal(repeatSync.status, 200);
     const occurrences = repeatSync.data.orders.filter((o) => o.id === vaultOrder.id);
     assert.equal(occurrences.length, 1, 'Idempotent sync must not create duplicate orders');
+  });
+
+  // -------------------------------------------------------------------------
+  // POS TESTS (Model 1008 Handheld Terminal & Immediate Reusable Bill Code)
+  // -------------------------------------------------------------------------
+  await t.test('POS-T1: Placing a paid order assigns a 5-digit billCode alongside pickupToken', async () => {
+    const orderRes = await requestJson(
+      server,
+      'POST',
+      '/api/orders',
+      {
+        studentEmail: testStudentEmail,
+        studentName: 'Test Student',
+        studentPhone: '9848012345',
+        block: 'CB',
+        items: [{ id: 'samosa', quantity: 2, price: 12 }],
+        paymentMethod: 'Razorpay UPI',
+        paymentStatus: 'PAID',
+      },
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(orderRes.status, 200);
+    assert.ok(orderRes.data.order.billCode, 'Order should have a billCode');
+    assert.match(orderRes.data.order.billCode, /^\d{5}$/, 'billCode must be 5 digits');
+    assert.equal(orderRes.data.order.billStatus, 'ACTIVE');
+  });
+
+  await t.test('POS-T2: POS operator login succeeds with valid operator or admin credentials', async () => {
+    // 1. Operator login
+    const opLoginRes = await requestJson(server, 'POST', '/api/pos/auth/login', {
+      identifier: 'operator@cvr.ac.in',
+      password: 'pos123',
+    });
+    assert.equal(opLoginRes.status, 200);
+    assert.equal(opLoginRes.data.success, true);
+    assert.ok(opLoginRes.data.token);
+
+    // 2. Admin login via POS
+    const adminPosLogin = await requestJson(server, 'POST', '/api/pos/auth/login', {
+      identifier: 'admin@cvr.ac.in',
+      password: 'admin123',
+    });
+    assert.equal(adminPosLogin.status, 200);
+    assert.equal(adminPosLogin.data.success, true);
+  });
+
+  await t.test('POS-T3 to POS-T7: Complete Order Verification, Atomic Claim, Print Confirmation, and Immediate Code Reuse without Collision', async () => {
+    // 1. Create Order A
+    const orderARes = await requestJson(
+      server,
+      'POST',
+      '/api/orders',
+      {
+        studentEmail: testStudentEmail,
+        studentName: 'Student Alpha',
+        items: [{ id: 'veg_puff', quantity: 1, price: 25 }],
+        paymentStatus: 'PAID',
+      },
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    assert.equal(orderARes.status, 200);
+    const orderA = orderARes.data.order;
+    const codeA = orderA.billCode;
+    assert.ok(codeA, 'Order A must have billCode');
+
+    // 2. POS Verify Order A by billCode
+    const verifyA = await requestJson(server, 'POST', '/api/pos/verify-order', { code: codeA });
+    assert.equal(verifyA.status, 200);
+    assert.equal(verifyA.data.success, true);
+    assert.equal(verifyA.data.order.id, orderA.id);
+    assert.equal(verifyA.data.isEligibleForPrint, true);
+
+    // 3. POS Acquire Atomic Print Lock (Claim)
+    const ptxnId = `ptxn_${Date.now()}`;
+    const claimA = await requestJson(server, 'POST', '/api/pos/claim-order', {
+      orderId: orderA.id,
+      operatorId: 'POS-1008-Counter1',
+      printTransactionId: ptxnId,
+    });
+    assert.equal(claimA.status, 200);
+    assert.equal(claimA.data.success, true);
+
+    // 4. Concurrent claim by another terminal is locked
+    const concurrentClaim = await requestJson(server, 'POST', '/api/pos/claim-order', {
+      orderId: orderA.id,
+      operatorId: 'POS-1008-Counter2',
+      printTransactionId: 'different_ptxn_id',
+    });
+    assert.equal(concurrentClaim.status, 423, 'Concurrent claim within 45s must return 423 Locked');
+
+    // 5. Confirm Print
+    const confirmA = await requestJson(server, 'POST', '/api/pos/confirm-print', {
+      orderId: orderA.id,
+      operatorId: 'POS-1008-Counter1',
+      printTransactionId: ptxnId,
+    });
+    assert.equal(confirmA.status, 200);
+    assert.equal(confirmA.data.success, true);
+    assert.equal(confirmA.data.order.orderStatus, 'CLAIMED');
+    assert.equal(confirmA.data.order.billStatus, 'EXPIRED');
+    assert.ok(confirmA.data.order.printedAt, 'printedAt must be set');
+
+    // 6. Verify now returns ALREADY_PRINTED (409) for historical record
+    const reVerifyA = await requestJson(server, 'POST', '/api/pos/verify-order', { code: codeA });
+    assert.equal(reVerifyA.status, 409);
+    assert.equal(reVerifyA.data.code, 'ALREADY_PRINTED');
+    assert.equal(reVerifyA.data.order.id, orderA.id);
+
+    // 7. IMMEDIATE REUSABILITY: Assigning codeA to a new Order B
+    // Manually test that activeCodes set NO LONGER includes codeA
+    const activeDb = JSON.parse(fs.readFileSync(isolatedDbFile, 'utf8'));
+    const activeCodesSet = getCurrentlyActiveBillCodes(activeDb);
+    assert.equal(activeCodesSet.has(codeA), false, 'Released code must NOT be in active set');
+
+    // Place Order B forcing codeA to prove immediate reuse
+    const orderB = {
+      id: `NST-${Math.floor(1000 + Math.random() * 9000)}`,
+      studentEmail: testStudentEmail,
+      studentName: 'Student Beta',
+      items: [{ id: 'samosa', quantity: 1, price: 12 }],
+      totalAmount: 12,
+      discount: 0,
+      finalAmount: 12,
+      paymentMethod: 'Razorpay UPI',
+      transactionId: `TXN-REUSE-${Date.now()}`,
+      paymentStatus: 'PAID',
+      orderStatus: 'PENDING_PICKUP',
+      billStatus: 'ACTIVE',
+      billCollectedAt: null,
+      pickupToken: 'B8K',
+      billCode: codeA, // Reused code!
+      createdAt: new Date().toISOString(),
+    };
+    activeDb.orders.unshift(orderB);
+    fs.writeFileSync(isolatedDbFile, JSON.stringify(activeDb, null, 2), 'utf8');
+
+    // Verify codeA NOW resolves exclusively to active Order B!
+    const verifyReused = await requestJson(server, 'POST', '/api/pos/verify-order', { code: codeA });
+    assert.equal(verifyReused.status, 200, 'Reused code must resolve to active order');
+    assert.equal(verifyReused.data.order.id, orderB.id, 'Must return new active Order B, NOT expired Order A');
+
+    // Expired Order A remains permanently in database!
+    const updatedDb = JSON.parse(fs.readFileSync(isolatedDbFile, 'utf8'));
+    const foundOrderA = updatedDb.orders.find((o) => o.id === orderA.id);
+    assert.ok(foundOrderA, 'Historical Order A must exist permanently in database');
+    assert.equal(foundOrderA.billStatus, 'EXPIRED');
+    assert.equal(foundOrderA.billCode, codeA);
+  });
+
+  await t.test('POS-T8: Report print failure releases print lock and keeps order active for retry', async () => {
+    // Create Order C
+    const orderCRes = await requestJson(
+      server,
+      'POST',
+      '/api/orders',
+      {
+        studentEmail: testStudentEmail,
+        studentName: 'Student Charlie',
+        items: [{ id: 'egg_puff', quantity: 1, price: 25 }],
+        paymentStatus: 'PAID',
+      },
+      { Authorization: `Bearer ${createdToken}` }
+    );
+    const orderC = orderCRes.data.order;
+
+    // Lock Order C
+    await requestJson(server, 'POST', '/api/pos/claim-order', {
+      orderId: orderC.id,
+      operatorId: 'POS-1008',
+      printTransactionId: 'ptxn_test_fail',
+    });
+
+    // Report Paper Out
+    const failRes = await requestJson(server, 'POST', '/api/pos/report-print-failure', {
+      orderId: orderC.id,
+      reason: 'OUT_OF_PAPER',
+    });
+    assert.equal(failRes.status, 200);
+
+    // Verify order is still active and can be reclaimed
+    const reclaimRes = await requestJson(server, 'POST', '/api/pos/claim-order', {
+      orderId: orderC.id,
+      operatorId: 'POS-1008',
+      printTransactionId: 'ptxn_retry',
+    });
+    assert.equal(reclaimRes.status, 200, 'Should be able to reclaim after print failure is handled');
+  });
+
+  await t.test('POS-T9: Status endpoint returns Model 1008 terminal profile', async () => {
+    const statusRes = await requestJson(server, 'GET', '/api/pos/status');
+    assert.equal(statusRes.status, 200);
+    assert.equal(statusRes.data.status, 'ok');
+    assert.ok(statusRes.data.terminalModel.includes('1008'));
   });
 });
 
