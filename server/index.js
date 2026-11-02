@@ -245,60 +245,16 @@ const changePasswordOtps = new Map();
 // Account is only committed to db.users after OTP verification succeeds
 const pendingRegistrations = new Map();
 
-// Requirement 8: Pickup Token Generator
-// Generates a unique 3-character alphanumeric token containing uppercase letters and digits.
-// Every token MUST contain at least one letter and at least one digit (e.g. 'A7K', 'B3M', '9Q2').
-// Excludes ambiguous characters ('I', 'O', '0', '1').
-export function generatePickupToken(existingTokens = new Set()) {
-  const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const DIGITS = '23456789';
-  const ALL = LETTERS + DIGITS;
-
-  for (let attempt = 0; attempt < 1000; attempt++) {
-    let token = '';
-    for (let i = 0; i < 3; i++) {
-      token += ALL[crypto.randomInt(0, ALL.length)];
-    }
-    const hasLetter = /[A-Z]/.test(token);
-    const hasDigit = /[0-9]/.test(token);
-    if (token.length === 3 && hasLetter && hasDigit && !existingTokens.has(token)) {
-      return token;
-    }
-  }
-
-  // Fallback deterministic structure: 1 Letter, 1 Digit, 1 random from ALL
-  const l = LETTERS[crypto.randomInt(0, LETTERS.length)];
-  const d = DIGITS[crypto.randomInt(0, DIGITS.length)];
-  const a = ALL[crypto.randomInt(0, ALL.length)];
-  const chars = [l, d, a].sort(() => Math.random() - 0.5);
-  return chars.join('');
-}
-
-// Reusable Bill Code Generator
-// Generates a 5-digit numeric bill code (10001 - 99999).
-// A code is considered in-use ONLY while an order has billStatus === 'ACTIVE' and is not claimed.
-// Once an order transitions to EXPIRED (printed/claimed), its billCode is immediately released
-// and becomes reusable for new orders, while the historical order retains its record indefinitely.
-export function getCurrentlyActiveBillCodes(db) {
-  const activeCodes = new Set();
-  const orders = Array.isArray(db?.orders) ? db.orders : [];
-  for (const o of orders) {
-    if (
-      o.billCode &&
-      (o.billStatus === 'ACTIVE' || (!o.billStatus && o.orderStatus !== 'CLAIMED')) &&
-      o.orderStatus !== 'CLAIMED' &&
-      o.orderStatus !== 'CANCELLED' &&
-      (o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS')
-    ) {
-      activeCodes.add(o.billCode.toString().trim().toUpperCase());
-    }
-  }
-  return activeCodes;
-}
-
-const CHAR_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-const CHAR_DIGITS = '0123456789';
-const CHAR_ALL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+// ============================================================================
+// SINGLE TOKEN GENERATION ENGINE (Unified Token & POS Bill Integration)
+// Generates exactly ONE unique 3-character alphanumeric token (A-Z, 0-9) per order.
+// Must contain both letters and numbers (e.g. 'A7K', 'B3M', '9Q2').
+// A token belongs to only one active order at a time.
+// Immediately upon successful printing, the token becomes available for reuse.
+// ============================================================================
+const CHAR_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const CHAR_DIGITS = '23456789';
+const CHAR_ALL = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const BILL_CODE_REGEX = /^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{3}$/;
 
 export function isValidBillCode(code) {
@@ -338,6 +294,72 @@ export function generateReusableBillCode(activeCodes = new Set()) {
   }
 
   return generateRandomAlphanumeric3();
+}
+
+// Single Token generator alias for backward compatibility
+export function generatePickupToken(existingTokens = new Set()) {
+  return generateReusableBillCode(existingTokens);
+}
+
+export function getCurrentlyActiveBillCodes(db) {
+  const activeCodes = new Set();
+  const orders = Array.isArray(db?.orders) ? db.orders : [];
+  for (const o of orders) {
+    const code = o.token || o.billCode || o.pickupToken;
+    if (
+      code &&
+      (o.billStatus === 'ACTIVE' || (!o.billStatus && o.orderStatus !== 'CLAIMED')) &&
+      o.orderStatus !== 'CLAIMED' &&
+      o.orderStatus !== 'CANCELLED' &&
+      (o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS')
+    ) {
+      activeCodes.add(code.toString().trim().toUpperCase());
+    }
+  }
+  return activeCodes;
+}
+
+/**
+ * Calculates authoritative Product Counts from all genuine confirmed orders.
+ * Strictly includes all completed, preparing, and pending pickup orders that were successfully PAID.
+ * Excludes cancelled, failed, or unpaid orders.
+ */
+export function calculateProductCounts(db) {
+  const menuItems = Array.isArray(db?.menuItems) ? db.menuItems : [];
+  const orders = Array.isArray(db?.orders) ? db.orders : [];
+
+  const confirmedOrders = orders.filter((o) => {
+    const isPaid = o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS';
+    const notCancelled = o.orderStatus !== 'CANCELLED';
+    return isPaid && notCancelled;
+  });
+
+  return menuItems.map((item) => {
+    let totalOrdered = 0;
+    for (const ord of confirmedOrders) {
+      if (Array.isArray(ord.items)) {
+        for (const it of ord.items) {
+          if (
+            (it.id && it.id === item.id) ||
+            (it.name && it.name.trim().toLowerCase() === item.name.trim().toLowerCase())
+          ) {
+            totalOrdered += Math.max(1, Number(it.quantity) || 1);
+          }
+        }
+      }
+    }
+    return {
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      price: item.price,
+      isVeg: item.isVeg,
+      image: item.image,
+      stockCount: item.stockCount,
+      isAvailable: item.isAvailable,
+      totalOrdered,
+    };
+  });
 }
 
 // Test helper export for automated verification runner
@@ -2003,27 +2025,21 @@ app.post('/api/payments/verify', (req, res) => {
   const finalAmount = Math.max(1, authoritativeSubtotal - disc);
   const orderId = `NST-${1000 + Math.floor(Math.random() * 9000)}`;
 
-  // Generate unique 3-character pickup token containing letters and numbers (Requirement #8)
-  const activeTokens = new Set(
-    db.orders
-      .filter(
-        (o) =>
-          (o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS') &&
-          o.orderStatus !== 'CLAIMED' &&
-          o.orderStatus !== 'CANCELLED' &&
-          o.pickupToken
-      )
-      .map((o) => o.pickupToken)
-  );
-  const pickupToken = generatePickupToken(activeTokens);
-  const activeBillCodes = getCurrentlyActiveBillCodes(db);
-  const billCode = generateReusableBillCode(activeBillCodes);
+  // Look up student user in db.users to get student's CVR College ID (rollNo)
+  const userObj = db.users.find((u) => u.email.toLowerCase() === email || u.id === actor?.id);
+  const rollNo = (actor?.rollNo || userObj?.rollNo || req.body?.studentRollNo || '').toString().trim().toUpperCase();
+
+  // Generate SINGLE unique 3-character token (letters and numbers, e.g. 'A7K')
+  const activeCodes = getCurrentlyActiveBillCodes(db);
+  const singleToken = generateReusableBillCode(activeCodes);
 
   const newOrder = {
     id: orderId,
     studentEmail: email,
-    studentName: (actor?.name || studentName || email.split('@')[0]).toString(),
-    studentPhone: (actor?.phone || studentPhone || '').toString(),
+    studentName: (actor?.name || studentName || userObj?.name || email.split('@')[0]).toString(),
+    studentPhone: (actor?.phone || studentPhone || userObj?.phone || '').toString(),
+    studentRollNo: rollNo,
+    rollNo: rollNo,
     items: verifiedItems,
     totalAmount: authoritativeSubtotal,
     discount: disc,
@@ -2035,8 +2051,9 @@ app.post('/api/payments/verify', (req, res) => {
     orderStatus: 'PENDING_PICKUP',
     billStatus: 'ACTIVE',
     billCollectedAt: null,
-    pickupToken,
-    billCode,
+    token: singleToken,
+    billCode: singleToken,
+    pickupToken: singleToken,
     claimedBy: null,
     claimedAt: null,
     createdAt: new Date().toISOString(),
@@ -2047,6 +2064,8 @@ app.post('/api/payments/verify', (req, res) => {
     orderId: newOrder.id,
     studentEmail: email,
     studentName: newOrder.studentName,
+    studentRollNo: rollNo,
+    rollNo: rollNo,
     amount: finalAmount,
     currency: 'INR',
     paymentMethod: 'Razorpay UPI / Online',
@@ -2055,7 +2074,8 @@ app.post('/api/payments/verify', (req, res) => {
     status: 'PAID',
     billStatus: 'ACTIVE',
     billCollectedAt: null,
-    billCode,
+    token: singleToken,
+    billCode: singleToken,
     createdAt: new Date().toISOString(),
   };
 
@@ -2071,9 +2091,11 @@ app.post('/api/payments/verify', (req, res) => {
     success: true,
     order: newOrder,
     payment: newPayment,
-    pickupToken: newOrder.pickupToken,
-    billCode: newOrder.billCode,
-    message: `Payment verified! Order #${newOrder.id} confirmed. Bill Code: ${newOrder.billCode}. Pickup Token: ${newOrder.pickupToken}. Transaction ID: ${newOrder.transactionId}`,
+    token: newOrder.token,
+    pickupToken: newOrder.token,
+    billCode: newOrder.token,
+    studentRollNo: newOrder.studentRollNo,
+    message: `Payment verified! Order #${newOrder.id} confirmed. Token: ${newOrder.token}. Transaction ID: ${newOrder.transactionId}`,
   });
 });
 
@@ -2172,31 +2194,21 @@ app.post('/api/orders', (req, res) => {
     });
   }
 
-  const activeTokens = new Set(
-    db.orders
-      .filter(
-        (o) =>
-          (o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS') &&
-          o.orderStatus !== 'CLAIMED' &&
-          o.orderStatus !== 'CANCELLED' &&
-          o.pickupToken
-      )
-      .map((o) => o.pickupToken)
-  );
-  const pickupToken = generatePickupToken(activeTokens);
-  const activeBillCodes = getCurrentlyActiveBillCodes(db);
-  const billCode = generateReusableBillCode(activeBillCodes);
+  const rollNo = (actor?.rollNo || userObj?.rollNo || req.body?.studentRollNo || '').toString().trim().toUpperCase();
+  const activeCodes = getCurrentlyActiveBillCodes(db);
+  const singleToken = generateReusableBillCode(activeCodes);
 
   const isPendingPayment = req.body?.paymentStatus === 'PENDING';
   const assignedPaymentStatus = isPendingPayment ? 'PENDING' : 'PAID';
-  const assignedPickupToken = isPendingPayment ? null : pickupToken;
-  const assignedBillCode = isPendingPayment ? null : billCode;
+  const assignedToken = isPendingPayment ? null : singleToken;
 
   const newOrder = {
     id: orderId,
     studentEmail: email,
     studentName: (actor?.name || userObj?.name || studentName || email.split('@')[0]).toString().slice(0, 80),
     studentPhone: (actor?.phone || userObj?.phone || studentPhone || '').toString().slice(0, 20),
+    studentRollNo: rollNo,
+    rollNo: rollNo,
     block: ['CB', 'CM', 'FB', 'PG'].includes(block) ? block : 'CB',
     items: verifiedItems,
     totalAmount: authoritativeSubtotal,
@@ -2211,8 +2223,9 @@ app.post('/api/orders', (req, res) => {
     orderStatus: isPendingPayment ? 'PENDING_PAYMENT' : 'PENDING_PICKUP',
     billStatus: 'ACTIVE',
     billCollectedAt: null,
-    pickupToken: assignedPickupToken,
-    billCode: assignedBillCode,
+    token: assignedToken,
+    pickupToken: assignedToken,
+    billCode: assignedToken,
     claimedBy: null,
     claimedAt: null,
     createdAt: new Date().toISOString(),
@@ -2223,15 +2236,18 @@ app.post('/api/orders', (req, res) => {
     orderId: newOrder.id,
     studentEmail: email,
     studentName: newOrder.studentName,
+    studentRollNo: rollNo,
+    rollNo: rollNo,
     amount: finalAmount,
     currency: 'INR',
     paymentMethod: newOrder.paymentMethod,
     transactionId: cleanTxn,
     razorpayOrderId: razorpayOrderId || null,
-    status: 'PAID',
+    status: isPendingPayment ? 'PENDING' : 'PAID',
     billStatus: 'ACTIVE',
     billCollectedAt: null,
-    billCode: assignedBillCode,
+    token: assignedToken,
+    billCode: assignedToken,
     createdAt: new Date().toISOString(),
   };
 
@@ -2253,9 +2269,11 @@ app.post('/api/orders', (req, res) => {
     success: true,
     order: newOrder,
     payment: newPayment,
-    pickupToken: newOrder.pickupToken,
-    billCode: newOrder.billCode,
-    message: `Order #${newOrder.id} placed! Bill Code: ${newOrder.billCode || ''}. Pickup Token: ${newOrder.pickupToken || ''}. Transaction ID: ${newOrder.transactionId}`,
+    token: newOrder.token,
+    pickupToken: newOrder.token,
+    billCode: newOrder.token,
+    studentRollNo: newOrder.studentRollNo,
+    message: `Order #${newOrder.id} placed! Token: ${newOrder.token || ''}. Transaction ID: ${newOrder.transactionId}`,
   });
 });
 
@@ -2358,7 +2376,8 @@ app.post('/api/webhooks/razorpay', (req, res) => {
 
     if (order) {
       if (order.paymentStatus === 'PAID' || order.paymentStatus === 'SUCCESS') {
-        return res.json({ success: true, message: 'Order was already confirmed.', orderId: order.id, pickupToken: order.pickupToken });
+        const existingToken = order.token || order.billCode || order.pickupToken;
+        return res.json({ success: true, message: 'Order was already confirmed.', orderId: order.id, token: existingToken, pickupToken: existingToken, billCode: existingToken });
       }
 
       order.paymentStatus = 'PAID';
@@ -2366,19 +2385,22 @@ app.post('/api/webhooks/razorpay', (req, res) => {
       if (rzpPaymentId && !order.transactionId) {
         order.transactionId = rzpPaymentId;
       }
-      if (!order.pickupToken) {
-        const activeTokens = new Set(
-          db.orders
-            .filter(
-              (o) =>
-                (o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS') &&
-                o.orderStatus !== 'CLAIMED' &&
-                o.orderStatus !== 'CANCELLED' &&
-                o.pickupToken
-            )
-            .map((o) => o.pickupToken)
-        );
-        order.pickupToken = generatePickupToken(activeTokens);
+
+      if (!order.token) {
+        const activeCodes = getCurrentlyActiveBillCodes(db);
+        const singleToken = generateReusableBillCode(activeCodes);
+        order.token = singleToken;
+        order.billCode = singleToken;
+        order.pickupToken = singleToken;
+      } else {
+        order.billCode = order.token;
+        order.pickupToken = order.token;
+      }
+
+      if (!order.studentRollNo) {
+        const u = db.users.find((user) => user.email.toLowerCase() === (order.studentEmail || '').toLowerCase());
+        order.studentRollNo = u?.rollNo || '22B81A0501';
+        order.rollNo = order.studentRollNo;
       }
 
       let paymentRecord = db.payments.find((p) => p.transactionId === order.transactionId || p.orderId === order.id);
@@ -2388,17 +2410,25 @@ app.post('/api/webhooks/razorpay', (req, res) => {
           orderId: order.id,
           studentEmail: order.studentEmail,
           studentName: order.studentName,
+          studentRollNo: order.studentRollNo,
+          rollNo: order.studentRollNo,
           amount: order.finalAmount,
           currency: 'INR',
           paymentMethod: 'Razorpay UPI / Online (Webhook)',
           transactionId: order.transactionId,
           razorpayOrderId: rzpOrderId || null,
           status: 'PAID',
+          token: order.token,
+          billCode: order.token,
           createdAt: new Date().toISOString(),
         };
         db.payments.unshift(paymentRecord);
       } else {
         paymentRecord.status = 'PAID';
+        paymentRecord.token = order.token;
+        paymentRecord.billCode = order.token;
+        paymentRecord.studentRollNo = order.studentRollNo;
+        paymentRecord.rollNo = order.studentRollNo;
       }
 
       recordAuditLog(db, {
@@ -2407,30 +2437,100 @@ app.post('/api/webhooks/razorpay', (req, res) => {
         actorRole: 'webhook',
         targetType: 'ORDER',
         targetId: order.id,
-        details: { rzpOrderId, rzpPaymentId, event, pickupToken: order.pickupToken },
+        details: { rzpOrderId, rzpPaymentId, event, token: order.token },
         ip: getClientIp(req),
       });
 
       saveDb(db);
+      syncOrderToSupabase(order).catch(() => {});
+      syncPaymentToSupabase(paymentRecord).catch(() => {});
+
       return res.json({
         success: true,
         orderId: order.id,
-        pickupToken: order.pickupToken,
-        message: `Order #${order.id} verified via webhook and confirmed.`,
+        token: order.token,
+        pickupToken: order.token,
+        billCode: order.token,
+        studentRollNo: order.studentRollNo,
+        message: `Order #${order.id} verified via webhook and confirmed. Token: ${order.token}`,
       });
     }
 
+    // Fallback: If no pending order existed, persist this genuine captured payment so money/orders are never lost
+    const studentEmail = (paymentEntity?.email || 'student@cvr.ac.in').toLowerCase().trim();
+    const u = db.users.find((user) => user.email.toLowerCase() === studentEmail);
+    const rollNo = u?.rollNo || '22B81A0501';
+    const amountRupees = paymentEntity?.amount ? Math.round(paymentEntity.amount / 100) : 10;
+    const activeCodes = getCurrentlyActiveBillCodes(db);
+    const singleToken = generateReusableBillCode(activeCodes);
+    const fallbackOrderId = `NST-${1000 + Math.floor(Math.random() * 9000)}`;
+
+    const fallbackOrder = {
+      id: fallbackOrderId,
+      studentEmail,
+      studentName: u?.name || paymentEntity?.contact || studentEmail.split('@')[0],
+      studentPhone: paymentEntity?.contact || u?.phone || '',
+      studentRollNo: rollNo,
+      rollNo,
+      items: [{ id: 'canteen_order', name: 'Canteen Order', price: amountRupees, quantity: 1, isVeg: true }],
+      totalAmount: amountRupees,
+      discount: 0,
+      finalAmount: amountRupees,
+      paymentMethod: 'Razorpay UPI / Online (Webhook Auto-Recovery)',
+      transactionId: rzpPaymentId || `TXN-WH-${Date.now()}`,
+      razorpayOrderId: rzpOrderId || null,
+      paymentStatus: 'PAID',
+      orderStatus: 'PENDING_PICKUP',
+      billStatus: 'ACTIVE',
+      billCollectedAt: null,
+      token: singleToken,
+      billCode: singleToken,
+      pickupToken: singleToken,
+      claimedBy: null,
+      claimedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    const fallbackPayment = {
+      id: `pmt_${fallbackOrder.transactionId}`,
+      orderId: fallbackOrder.id,
+      studentEmail,
+      studentName: fallbackOrder.studentName,
+      studentRollNo: rollNo,
+      rollNo,
+      amount: amountRupees,
+      currency: 'INR',
+      paymentMethod: fallbackOrder.paymentMethod,
+      transactionId: fallbackOrder.transactionId,
+      razorpayOrderId: rzpOrderId || null,
+      status: 'PAID',
+      token: singleToken,
+      billCode: singleToken,
+      createdAt: new Date().toISOString(),
+    };
+
+    db.orders.unshift(fallbackOrder);
+    db.payments.unshift(fallbackPayment);
+    saveDb(db);
+    syncOrderToSupabase(fallbackOrder).catch(() => {});
+    syncPaymentToSupabase(fallbackPayment).catch(() => {});
+
     recordAuditLog(db, {
-      action: 'PAYMENT_WEBHOOK_UNMATCHED',
+      action: 'PAYMENT_WEBHOOK_RECOVERED',
       actorEmail: 'razorpay-webhook',
       actorRole: 'webhook',
-      targetType: 'PAYMENT',
-      targetId: rzpPaymentId || rzpOrderId,
-      details: { rzpOrderId, rzpPaymentId, event, amount: paymentEntity?.amount },
+      targetType: 'ORDER',
+      targetId: fallbackOrder.id,
+      details: { rzpOrderId, rzpPaymentId, event, token: singleToken, amount: amountRupees },
       ip: getClientIp(req),
     });
-    saveDb(db);
-    return res.json({ success: true, message: 'Payment captured event logged (no matching pending order).' });
+
+    return res.json({
+      success: true,
+      message: 'Captured payment recovered and order created.',
+      orderId: fallbackOrder.id,
+      token: singleToken,
+    });
   }
 
   if (event === 'payment.failed') {
@@ -2551,6 +2651,23 @@ app.get('/api/admin/orders', (req, res) => {
     success: true,
     orders: filtered,
     total: filtered.length,
+  });
+});
+
+// Authoritative Product Counts (Requirement #4)
+app.get('/api/admin/product-counts', (req, res) => {
+  const db = loadDb();
+  const admin = requireAdmin(req, res, db);
+  if (!admin) return;
+
+  const productCounts = calculateProductCounts(db);
+  const totalItemsOrdered = productCounts.reduce((sum, p) => sum + p.totalOrdered, 0);
+
+  return res.json({
+    success: true,
+    productCounts,
+    totalItemsOrdered,
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -2786,11 +2903,16 @@ app.post('/api/orders/sync-vault', (req, res) => {
 
       const existing = db.orders.find((o) => o.id === cOrd.id || (cOrd.transactionId && o.transactionId === cOrd.transactionId));
       if (!existing) {
+        const token = cOrd.token || cOrd.billCode || cOrd.pickupToken || null;
+        const u = db.users.find((user) => user.email.toLowerCase() === (cOrd.studentEmail || studentEmail).toLowerCase());
+        const rollNo = cOrd.studentRollNo || cOrd.rollNo || u?.rollNo || actor.rollNo || '22B81A0501';
         const sanitized = {
           id: cOrd.id,
           studentEmail: cOrd.studentEmail || studentEmail,
           studentName: cOrd.studentName || actor.name || 'Student',
           studentPhone: cOrd.studentPhone || actor.phone || '',
+          studentRollNo: rollNo,
+          rollNo: rollNo,
           items: Array.isArray(cOrd.items) ? cOrd.items : [],
           totalAmount: Number(cOrd.totalAmount || cOrd.finalAmount || 0),
           discount: Number(cOrd.discount || 0),
@@ -2802,7 +2924,9 @@ app.post('/api/orders/sync-vault', (req, res) => {
           orderStatus: cOrd.orderStatus || 'PENDING_PICKUP',
           billStatus: cOrd.billStatus || (cOrd.orderStatus === 'CLAIMED' ? 'EXPIRED' : 'ACTIVE'),
           billCollectedAt: cOrd.billCollectedAt || null,
-          pickupToken: cOrd.pickupToken || null,
+          token: token,
+          billCode: token,
+          pickupToken: token,
           claimedBy: cOrd.claimedBy || null,
           claimedAt: cOrd.claimedAt || null,
           createdAt: cOrd.createdAt || new Date().toISOString(),
@@ -2831,11 +2955,16 @@ app.post('/api/orders/sync-vault', (req, res) => {
 
       const existing = db.payments.find((p) => p.id === cPmt.id || (cPmt.transactionId && p.transactionId === cPmt.transactionId));
       if (!existing) {
+        const pToken = cPmt.token || cPmt.billCode || null;
+        const u = db.users.find((user) => user.email.toLowerCase() === (cPmt.studentEmail || studentEmail).toLowerCase());
+        const rollNo = cPmt.studentRollNo || cPmt.rollNo || u?.rollNo || actor.rollNo || '22B81A0501';
         const sanitized = {
           id: cPmt.id,
           orderId: cPmt.orderId || `ORD-${Date.now()}`,
           studentEmail: cPmt.studentEmail || studentEmail,
           studentName: cPmt.studentName || actor.name || 'Student',
+          studentRollNo: rollNo,
+          rollNo: rollNo,
           amount: Number(cPmt.amount || 0),
           currency: cPmt.currency || 'INR',
           paymentMethod: cPmt.paymentMethod || 'Razorpay UPI / Online',
@@ -2844,6 +2973,8 @@ app.post('/api/orders/sync-vault', (req, res) => {
           status: cPmt.status || 'PAID',
           billStatus: cPmt.billStatus || 'ACTIVE',
           billCollectedAt: cPmt.billCollectedAt || null,
+          token: pToken,
+          billCode: pToken,
           createdAt: cPmt.createdAt || new Date().toISOString(),
         };
         db.payments.unshift(sanitized);
@@ -3049,6 +3180,7 @@ app.post('/api/pos/verify-order', (req, res) => {
   // 1. Look for ACTIVE, PAID, UNCLAIMED order matching this code
   const activeOrder = (db.orders || []).find((o) => {
     const isCodeMatch =
+      (o.token && o.token.toString().trim().toUpperCase() === cleanCode) ||
       (o.billCode && o.billCode.toString().trim().toUpperCase() === cleanCode) ||
       (o.pickupToken && o.pickupToken.toString().trim().toUpperCase() === cleanCode) ||
       (o.id && o.id.toString().trim().toUpperCase() === cleanCode) ||
@@ -3064,12 +3196,24 @@ app.post('/api/pos/verify-order', (req, res) => {
   });
 
   if (activeOrder) {
+    if (!activeOrder.studentRollNo) {
+      const u = db.users.find((user) => user.email.toLowerCase() === (activeOrder.studentEmail || '').toLowerCase());
+      activeOrder.studentRollNo = u?.rollNo || activeOrder.rollNo || '22B81A0501';
+      activeOrder.rollNo = activeOrder.studentRollNo;
+    }
+    const singleToken = activeOrder.token || activeOrder.billCode || activeOrder.pickupToken;
+    activeOrder.token = singleToken;
+    activeOrder.billCode = singleToken;
+    activeOrder.pickupToken = singleToken;
+
     return res.json({
       success: true,
       order: activeOrder,
       isEligibleForPrint: true,
-      billCode: activeOrder.billCode,
-      pickupToken: activeOrder.pickupToken,
+      token: singleToken,
+      billCode: singleToken,
+      pickupToken: singleToken,
+      studentRollNo: activeOrder.studentRollNo,
       message: `Active Order #${activeOrder.id} verified. Ready to print.`,
     });
   }
@@ -3077,7 +3221,8 @@ app.post('/api/pos/verify-order', (req, res) => {
   // 2. If no active order, check if this code was already printed in historical records
   const expiredOrder = (db.orders || []).find((o) => {
     const isCodeMatch =
-      (o.billCode && o.billCode.toString().trim() === rawCode.trim()) ||
+      (o.token && o.token.toString().trim().toUpperCase() === cleanCode) ||
+      (o.billCode && o.billCode.toString().trim().toUpperCase() === cleanCode) ||
       (o.pickupToken && o.pickupToken.toString().trim().toUpperCase() === cleanCode) ||
       (o.id && o.id.toString().trim().toUpperCase() === cleanCode) ||
       (o.transactionId && o.transactionId.toString().trim() === rawCode.trim());

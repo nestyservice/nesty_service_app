@@ -157,42 +157,23 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
           );
         })()}
 
-        {/* Prominent Pickup Token & Bill Code Section */}
-        {(order.pickupToken || order.billCode) && (
+        {/* Prominent Single Token Section (Requirement #1) */}
+        {(order.token || order.billCode || order.pickupToken) && (
           <div
             data-testid="receipt_pickup_token_section"
-            className="mt-4 rounded-2xl p-4 bg-nesty-burgundy text-nesty-cream border-2 border-nesty-gold text-center shadow-lg"
+            className="mt-4 rounded-2xl p-5 bg-gradient-to-r from-nesty-burgundyDark via-nesty-burgundy to-nesty-burgundyDark text-nesty-cream border-2 border-nesty-gold text-center shadow-lg"
           >
-            <div className="flex items-center justify-center gap-6 flex-wrap">
-              {order.billCode && (
-                <div>
-                  <div className="text-[11px] font-extrabold tracking-widest uppercase text-amber-400">
-                    POS BILL CODE
-                  </div>
-                  <div
-                    data-testid="receipt_bill_code_display"
-                    className="text-3xl sm:text-4xl font-black font-mono tracking-widest text-white my-1"
-                  >
-                    {order.billCode}
-                  </div>
-                </div>
-              )}
-              {order.pickupToken && (
-                <div>
-                  <div className="text-[11px] font-extrabold tracking-widest uppercase text-nesty-gold">
-                    PICKUP TOKEN
-                  </div>
-                  <div
-                    data-testid="receipt_pickup_token_display"
-                    className="text-3xl sm:text-4xl font-black font-mono tracking-widest text-nesty-gold my-1"
-                  >
-                    {order.pickupToken}
-                  </div>
-                </div>
-              )}
+            <div className="text-xs font-black tracking-widest uppercase text-nesty-gold">
+              NESTY POS BILL TOKEN
             </div>
-            <p className="text-xs text-nesty-cream/90 max-w-xs mx-auto font-medium mt-1">
-              Give this code or token at the Canteen POS Counter to print your bill and collect your food.
+            <div
+              data-testid="receipt_token_display"
+              className="text-4xl sm:text-5xl font-black font-mono tracking-widest text-white my-1.5"
+            >
+              {order.token || order.billCode || order.pickupToken}
+            </div>
+            <p className="text-xs text-nesty-cream/90 max-w-sm mx-auto font-medium mt-1">
+              Enter this single 3-character token at the Canteen POS machine to print your verified receipt and collect your food.
             </p>
           </div>
         )}
@@ -206,6 +187,10 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
           <div className="flex justify-between">
             <span className="text-nesty-textSecondary">Student Email</span>
             <span className="font-bold text-nesty-textPrimary">{order.studentEmail}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-nesty-textSecondary">Student CVR ID</span>
+            <span className="font-mono font-bold text-nesty-burgundy">{order.studentRollNo || order.rollNo || '22B81A0501'}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-nesty-textSecondary">Pickup Location</span>

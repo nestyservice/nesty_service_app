@@ -5,6 +5,8 @@ import {
   CouponRecord,
   MenuItem,
   OrderRecord,
+  PaymentRecord,
+  ProductCountItem,
   UserAccount,
   resolveFoodImageUrl,
   RevenueAnalyticsResponse,
@@ -53,6 +55,7 @@ interface AdminDashboardViewProps {
   adminUser: UserAccount;
   menuItems: MenuItem[];
   orders: OrderRecord[];
+  payments?: PaymentRecord[];
   students: UserAccount[];
   coupons: CouponRecord[];
   announcements: AnnouncementRecord[];
@@ -101,6 +104,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   adminUser,
   menuItems,
   orders,
+  payments = [],
   students,
   coupons,
   announcements,
@@ -480,13 +484,60 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     }
   };
 
+
+  // Authoritative Product Counts across all genuine confirmed orders (Requirement #4)
+  const productCounts = useMemo(() => {
+    const tally: Record<string, number> = {};
+    menuItems.forEach((m) => {
+      tally[m.name.toLowerCase().trim()] = 0;
+    });
+
+    orders.forEach((ord) => {
+      const isPaid = ord.paymentStatus === 'PAID' || ord.paymentStatus === 'SUCCESS';
+      const notCancelled = ord.orderStatus !== 'CANCELLED';
+      if (isPaid && notCancelled && Array.isArray(ord.items)) {
+        ord.items.forEach((it) => {
+          const rawName = it.name?.toLowerCase().trim();
+          if (rawName) {
+            const matchedKey = Object.keys(tally).find(
+              (k) => k === rawName || rawName.includes(k) || k.includes(rawName)
+            );
+            const qty = Number(it.quantity) || 1;
+            if (matchedKey) {
+              tally[matchedKey] = (tally[matchedKey] || 0) + qty;
+            } else {
+              tally[rawName] = (tally[rawName] || 0) + qty;
+            }
+          }
+        });
+      }
+    });
+
+    return menuItems.map((item) => {
+      const count = tally[item.name.toLowerCase().trim()] || 0;
+      return {
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        price: item.price,
+        isVeg: item.isVeg,
+        stockCount: item.stockCount,
+        image: item.image,
+        totalQuantity: count,
+      };
+    });
+  }, [menuItems, orders]);
+
   // Filter orders according to search & status selections (Requirement #8 & #11)
   const filteredOrders = orders.filter((order) => {
     const q = orderSearch.trim().toLowerCase();
     const matchesSearch =
       !q ||
       order.id.toLowerCase().includes(q) ||
+      (order.token && order.token.toLowerCase().includes(q)) ||
+      (order.billCode && order.billCode.toLowerCase().includes(q)) ||
       (order.pickupToken && order.pickupToken.toLowerCase().includes(q)) ||
+      (order.studentRollNo && order.studentRollNo.toLowerCase().includes(q)) ||
       order.studentName.toLowerCase().includes(q) ||
       order.studentEmail.toLowerCase().includes(q) ||
       order.transactionId.toLowerCase().includes(q);
@@ -509,9 +560,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   ).length;
 
   return (
-    <div data-testid="admin_dashboard_screen" className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+    <div data-testid="admin_dashboard_screen" className="max-w-7xl mx-auto px-4 sm:px-6 pt-2 pb-8 space-y-4">
       {/* Admin Command Banner */}
-      <div className="rounded-3xl bg-gradient-to-r from-nesty-burgundyDark via-nesty-burgundy to-nesty-burgundyLight border-2 border-nesty-gold p-6 text-nesty-cream shadow-xl">
+      <div className="rounded-3xl bg-gradient-to-r from-nesty-burgundyDark via-nesty-burgundy to-nesty-burgundyLight border-2 border-nesty-gold p-4 sm:p-5 text-nesty-cream shadow-xl">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <span className="text-xs font-extrabold uppercase tracking-widest text-nesty-gold">
@@ -558,6 +609,80 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* AUTHORITATIVE PRODUCT COUNT SECTION (Requirement #4) */}
+      <section data-testid="admin_product_count_section" className="bg-nesty-creamSurface border-2 border-nesty-gold rounded-3xl p-5 shadow-md">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-nesty-gold/30 pb-3 mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-nesty-burgundy text-nesty-gold flex items-center justify-center font-black shadow-sm">
+              <UtensilsCrossed className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black uppercase tracking-widest text-nesty-burgundy">
+                  PRODUCT COUNT
+                </span>
+                <span className="px-2 py-0.5 rounded-full bg-nesty-gold text-nesty-burgundyDark text-[10px] font-black uppercase">
+                  Canteen Preparation Totals
+                </span>
+              </div>
+              <p className="text-xs text-nesty-textSecondary mt-0.5">
+                Total units ordered across all genuine confirmed canteen orders. Instant kitchen prep reference.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="px-3 py-1.5 rounded-xl bg-nesty-creamElevated border border-nesty-gold text-xs font-black text-nesty-burgundy">
+              {productCounts.reduce((sum, p) => sum + p.totalQuantity, 0)} Total Units Ordered
+            </span>
+          </div>
+        </div>
+
+        {/* Product Cards Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
+          {productCounts.map((prod) => (
+            <div
+              key={prod.id}
+              data-testid={`product_count_card_${prod.id}`}
+              className="bg-nesty-creamElevated border border-nesty-creamBorder hover:border-nesty-gold rounded-2xl p-3.5 flex flex-col justify-between transition shadow-sm"
+            >
+              <div className="flex items-start justify-between gap-1 mb-2">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span
+                    className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                      prod.isVeg ? 'bg-emerald-600' : 'bg-red-600'
+                    }`}
+                    title={prod.isVeg ? 'Vegetarian' : 'Non-Vegetarian'}
+                  />
+                  <span className="text-xs font-extrabold text-nesty-burgundy truncate" title={prod.name}>
+                    {prod.name}
+                  </span>
+                </div>
+                <span className="text-[10px] font-bold text-nesty-textSecondary whitespace-nowrap">
+                  ₹{prod.price}
+                </span>
+              </div>
+
+              <div className="my-1.5 py-2 px-3 rounded-xl bg-nesty-creamSurface border border-nesty-gold/40 flex items-center justify-between">
+                <span className="text-[11px] font-bold text-nesty-textSecondary uppercase tracking-wider">
+                  Ordered
+                </span>
+                <span className={`text-xl font-black ${prod.totalQuantity > 0 ? 'text-nesty-burgundy' : 'text-nesty-textSecondary/60'}`}>
+                  {prod.totalQuantity}
+                </span>
+              </div>
+
+              <div className="mt-1 flex items-center justify-between text-[10px] text-nesty-textSecondary font-semibold">
+                <span>Cat: {prod.category}</span>
+                <span className="text-nesty-burgundy font-bold">
+                  ₹{prod.totalQuantity * prod.price}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
 
       {/* Navigation Tabs (Products, Orders, Revenue, Students, Coupons, Announcements) */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
@@ -828,12 +953,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         <span className="px-3 py-1 rounded-xl bg-nesty-burgundy text-nesty-cream text-xs font-extrabold">
                           #{order.id}
                         </span>
-                        {order.pickupToken && (
+                        {(order.token || order.billCode || order.pickupToken) && (
                           <span
                             data-testid={`admin_order_token_${order.id}`}
                             className="px-3 py-1 rounded-xl bg-nesty-gold text-nesty-burgundyDark border border-nesty-burgundy text-xs font-black tracking-widest shadow-sm"
                           >
-                            TOKEN: {order.pickupToken}
+                            TOKEN: {order.token || order.billCode || order.pickupToken}
+                          </span>
+                        )}
+                        {(order.studentRollNo || order.rollNo) && (
+                          <span className="px-2.5 py-0.5 rounded-lg bg-nesty-burgundy/10 border border-nesty-burgundy/20 text-[11px] font-bold text-nesty-burgundy">
+                            CVR ID: {order.studentRollNo || order.rollNo}
                           </span>
                         )}
                         <span className="text-xs font-mono font-bold text-nesty-burgundy">

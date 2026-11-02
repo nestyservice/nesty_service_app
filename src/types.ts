@@ -25,6 +25,9 @@ export interface OrderRecord {
   studentEmail: string;
   studentName: string;
   studentPhone: string;
+  studentRollNo?: string;
+  rollNo?: string;
+  token?: string;
   block?: string;
   items: OrderItem[];
   totalAmount: number;
@@ -41,7 +44,6 @@ export interface OrderRecord {
   billCollectedAt?: string | null;
   billCode?: string;
   pickupToken?: string;
-  billCode?: string;
   printedAt?: string | null;
   printedBy?: string | null;
   failureReason?: string;
@@ -55,6 +57,9 @@ export interface PaymentRecord {
   orderId: string;
   studentEmail: string;
   studentName: string;
+  studentRollNo?: string;
+  rollNo?: string;
+  token?: string;
   amount: number;
   currency: string;
   paymentMethod: string;
@@ -66,6 +71,15 @@ export interface PaymentRecord {
   billCode?: string;
   failureReason?: string;
   createdAt: string;
+}
+
+export interface ProductCountItem {
+  id: string;
+  name: string;
+  category: string;
+  price: number;
+  isVeg: boolean;
+  totalQuantity: number;
 }
 
 export interface UserAccount {

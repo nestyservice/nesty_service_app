@@ -460,20 +460,17 @@ export const StudentOrderHistoryView: React.FC<OrderHistoryViewProps> = ({
                     <span className="px-3 py-1 rounded-xl bg-nesty-burgundy text-nesty-cream text-xs font-extrabold">
                       Order #{order.id}
                     </span>
-                    {order.pickupToken && (
+                    {(order.token || order.billCode || order.pickupToken) && (
                       <span
                         data-testid={`student_order_token_${order.id}`}
                         className="px-3 py-1 rounded-xl bg-nesty-gold text-nesty-burgundyDark border border-nesty-burgundy text-xs font-black tracking-widest shadow-sm"
                       >
-                        TOKEN: {order.pickupToken}
+                        TOKEN: {order.token || order.billCode || order.pickupToken}
                       </span>
                     )}
-                    {order.billCode && (
-                      <span
-                        data-testid={`student_order_bill_code_${order.id}`}
-                        className="px-3 py-1 rounded-xl bg-amber-500 text-white border border-amber-600 text-xs font-black tracking-widest shadow-sm"
-                      >
-                        BILL CODE: {order.billCode}
+                    {(order.studentRollNo || order.rollNo) && (
+                      <span className="px-2.5 py-1 rounded-xl bg-nesty-burgundy/10 border border-nesty-burgundy/20 text-xs font-bold text-nesty-burgundy">
+                        CVR: {order.studentRollNo || order.rollNo}
                       </span>
                     )}
                     <span className="px-2.5 py-1 rounded-xl bg-nesty-creamElevated border border-nesty-gold text-xs font-bold text-nesty-burgundy">

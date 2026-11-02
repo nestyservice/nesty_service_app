@@ -681,6 +681,7 @@ export const App: React.FC = () => {
                 adminUser={currentUser}
                 menuItems={menuItems}
                 orders={orders}
+                payments={payments}
                 students={students}
                 coupons={coupons}
                 announcements={announcements}

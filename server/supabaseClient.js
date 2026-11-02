@@ -131,11 +131,16 @@ export async function syncOrderToSupabase(order) {
   const client = getSupabaseClient();
   if (!client || !order || !order.id) return null;
   try {
+    const singleToken = order.token || order.billCode || order.pickupToken || null;
+    const rollNo = order.studentRollNo || order.rollNo || null;
     const payload = {
       id: order.id,
       student_email: order.studentEmail,
       student_name: order.studentName,
       student_phone: order.studentPhone,
+      student_roll_no: rollNo,
+      roll_no: rollNo,
+      token: singleToken,
       items: order.items,
       total_amount: order.totalAmount,
       discount: order.discount,
@@ -147,17 +152,21 @@ export async function syncOrderToSupabase(order) {
       order_status: order.orderStatus,
       bill_status: order.billStatus || (order.orderStatus === 'CLAIMED' ? 'EXPIRED' : 'ACTIVE'),
       bill_collected_at: order.billCollectedAt || null,
-      pickup_token: order.pickupToken || null,
-      bill_code: order.billCode || null,
+      pickup_token: singleToken,
+      bill_code: singleToken,
       printed_at: order.printedAt || null,
       printed_by: order.printedBy || null,
       claimed_by: order.claimedBy || null,
       claimed_at: order.claimedAt || null,
       created_at: order.createdAt,
     };
-    await client.from('orders').upsert(payload, { onConflict: 'id' }).catch(() => {});
+    const { error } = await client.from('orders').upsert(payload, { onConflict: 'id' });
+    if (error) {
+      console.warn(`[SUPABASE] Order upsert notice for #${order.id}:`, error.message);
+    }
     return true;
-  } catch {
+  } catch (err) {
+    console.warn(`[SUPABASE] Non-fatal order sync error for #${order.id}:`, err.message);
     return null;
   }
 }
@@ -170,11 +179,16 @@ export async function syncPaymentToSupabase(payment) {
   const client = getSupabaseClient();
   if (!client || !payment || !payment.id) return null;
   try {
+    const singleToken = payment.token || payment.billCode || null;
+    const rollNo = payment.studentRollNo || payment.rollNo || null;
     const payload = {
       id: payment.id,
       order_id: payment.orderId,
       student_email: payment.studentEmail,
       student_name: payment.studentName,
+      student_roll_no: rollNo,
+      roll_no: rollNo,
+      token: singleToken,
       amount: payment.amount,
       currency: payment.currency || 'INR',
       payment_method: payment.paymentMethod,
@@ -185,9 +199,13 @@ export async function syncPaymentToSupabase(payment) {
       bill_collected_at: payment.billCollectedAt || null,
       created_at: payment.createdAt,
     };
-    await client.from('payments').upsert(payload, { onConflict: 'id' }).catch(() => {});
+    const { error } = await client.from('payments').upsert(payload, { onConflict: 'id' });
+    if (error) {
+      console.warn(`[SUPABASE] Payment upsert notice for ${payment.id}:`, error.message);
+    }
     return true;
-  } catch {
+  } catch (err) {
+    console.warn(`[SUPABASE] Non-fatal payment sync error for ${payment.id}:`, err.message);
     return null;
   }
 }
@@ -200,53 +218,76 @@ export async function fetchPersistentHistoryFromSupabase() {
   if (!client) return { orders: [], payments: [] };
   try {
     const [ordRes, pmtRes] = await Promise.all([
-      client.from('orders').select('*').catch(() => ({ data: null })),
-      client.from('payments').select('*').catch(() => ({ data: null })),
+      client.from('orders').select('*').catch((e) => ({ error: e, data: null })),
+      client.from('payments').select('*').catch((e) => ({ error: e, data: null })),
     ]);
 
-    const orders = (ordRes?.data || []).map((o) => ({
-      id: o.id,
-      studentEmail: o.student_email,
-      studentName: o.student_name,
-      studentPhone: o.student_phone,
-      items: o.items || [],
-      totalAmount: Number(o.total_amount || 0),
-      discount: Number(o.discount || 0),
-      finalAmount: Number(o.final_amount || 0),
-      paymentMethod: o.payment_method,
-      transactionId: o.transaction_id,
-      razorpayOrderId: o.razorpay_order_id,
-      paymentStatus: o.payment_status,
-      orderStatus: o.order_status,
-      billStatus: o.bill_status || (o.order_status === 'CLAIMED' ? 'EXPIRED' : 'ACTIVE'),
-      billCollectedAt: o.bill_collected_at,
-      pickupToken: o.pickup_token,
-      billCode: o.bill_code,
-      printedAt: o.printed_at,
-      printedBy: o.printed_by,
-      claimedBy: o.claimed_by,
-      claimedAt: o.claimed_at,
-      createdAt: o.created_at,
-    }));
+    if (ordRes?.error) {
+      console.warn('[SUPABASE] Failed to query orders table:', ordRes.error.message);
+    }
+    if (pmtRes?.error) {
+      console.warn('[SUPABASE] Failed to query payments table:', pmtRes.error.message);
+    }
 
-    const payments = (pmtRes?.data || []).map((p) => ({
-      id: p.id,
-      orderId: p.order_id,
-      studentEmail: p.student_email,
-      studentName: p.student_name,
-      amount: Number(p.amount || 0),
-      currency: p.currency || 'INR',
-      paymentMethod: p.payment_method,
-      transactionId: p.transaction_id,
-      razorpayOrderId: p.razorpay_order_id,
-      status: p.status,
-      billStatus: p.bill_status || 'ACTIVE',
-      billCollectedAt: p.bill_collected_at,
-      createdAt: p.created_at,
-    }));
+    const orders = (ordRes?.data || []).map((o) => {
+      const singleToken = o.token || o.bill_code || o.pickup_token || null;
+      const rollNo = o.student_roll_no || o.roll_no || '';
+      return {
+        id: o.id,
+        studentEmail: o.student_email,
+        studentName: o.student_name,
+        studentPhone: o.student_phone,
+        studentRollNo: rollNo,
+        rollNo: rollNo,
+        items: o.items || [],
+        totalAmount: Number(o.total_amount || 0),
+        discount: Number(o.discount || 0),
+        finalAmount: Number(o.final_amount || 0),
+        paymentMethod: o.payment_method,
+        transactionId: o.transaction_id,
+        razorpayOrderId: o.razorpay_order_id,
+        paymentStatus: o.payment_status,
+        orderStatus: o.order_status,
+        billStatus: o.bill_status || (o.order_status === 'CLAIMED' ? 'EXPIRED' : 'ACTIVE'),
+        billCollectedAt: o.bill_collected_at,
+        token: singleToken,
+        billCode: singleToken,
+        pickupToken: singleToken,
+        printedAt: o.printed_at,
+        printedBy: o.printed_by,
+        claimedBy: o.claimed_by,
+        claimedAt: o.claimed_at,
+        createdAt: o.created_at,
+      };
+    });
+
+    const payments = (pmtRes?.data || []).map((p) => {
+      const singleToken = p.token || p.bill_code || null;
+      const rollNo = p.student_roll_no || p.roll_no || '';
+      return {
+        id: p.id,
+        orderId: p.order_id,
+        studentEmail: p.student_email,
+        studentName: p.student_name,
+        studentRollNo: rollNo,
+        rollNo: rollNo,
+        amount: Number(p.amount || 0),
+        currency: p.currency || 'INR',
+        paymentMethod: p.payment_method,
+        transactionId: p.transaction_id,
+        razorpayOrderId: p.razorpay_order_id,
+        status: p.status,
+        billStatus: p.bill_status || 'ACTIVE',
+        billCollectedAt: p.bill_collected_at,
+        token: singleToken,
+        billCode: singleToken,
+        createdAt: p.created_at,
+      };
+    });
 
     return { orders, payments };
-  } catch {
+  } catch (err) {
+    console.warn('[SUPABASE] Unexpected error in fetchPersistentHistoryFromSupabase:', err.message);
     return { orders: [], payments: [] };
   }
 }
