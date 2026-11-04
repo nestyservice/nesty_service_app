@@ -87,7 +87,7 @@ interface AdminDashboardViewProps {
   onRefreshAll: () => void;
 }
 
-type AdminSection = 'PRODUCTS' | 'ORDERS' | 'REVENUE' | 'STUDENTS' | 'COUPONS' | 'ANNOUNCEMENTS' | 'AUDIT_LOGS';
+type AdminSection = 'PRODUCTS' | 'ORDERS' | 'REVENUE' | 'DAILY_REPORT' | 'STUDENTS' | 'COUPONS' | 'ANNOUNCEMENTS' | 'AUDIT_LOGS';
 
 const PRESET_PRODUCT_IMAGES = [
   { label: 'Samosa', url: '/images/samosa.webp' },
@@ -191,6 +191,176 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   // Announcements form
   const [annTitle, setAnnTitle] = useState('');
   const [annMsg, setAnnMsg] = useState('');
+
+  // 5:30 PM Daily Sales Report Engine State (Requirement #8)
+  const [dailyReportsList, setDailyReportsList] = useState<any[]>([]);
+  const [selectedReportDate, setSelectedReportDate] = useState<string>(() => {
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+    } catch {
+      return new Date().toISOString().split('T')[0];
+    }
+  });
+  const [currentDailyReport, setCurrentDailyReport] = useState<any | null>(null);
+  const [dailyReportLoading, setDailyReportLoading] = useState(false);
+  const [generatingReport, setGeneratingReport] = useState(false);
+  const [reportActionMsg, setReportActionMsg] = useState<string | null>(null);
+
+  // POS Devices & Security Alerts State (OWASP MASVS / Requirement #3)
+  const [posDevices, setPosDevices] = useState<any[]>([]);
+  const [securityAlerts, setSecurityAlerts] = useState<any[]>([]);
+
+  const fetchDailyReports = async (date = selectedReportDate) => {
+    setDailyReportLoading(true);
+    setReportActionMsg(null);
+    try {
+      const token = localStorage.getItem('nesty_web_auth_token') || localStorage.getItem('nesty_auth_token') || '';
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+      const listRes = await fetch('/api/admin/daily-reports', { headers });
+      if (listRes.ok) {
+        const listData = await listRes.json();
+        if (listData.success) {
+          setDailyReportsList(listData.reports || []);
+        }
+      }
+
+      const reportRes = await fetch(`/api/admin/daily-reports/${date}`, { headers });
+      if (reportRes.ok) {
+        const reportData = await reportRes.json();
+        if (reportData.success) {
+          setCurrentDailyReport(reportData.report);
+        }
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch daily reports:', err);
+    } finally {
+      setDailyReportLoading(false);
+    }
+  };
+
+  const handleGenerateReportNow = async (targetDate = selectedReportDate) => {
+    setGeneratingReport(true);
+    setReportActionMsg(null);
+    try {
+      const token = localStorage.getItem('nesty_web_auth_token') || localStorage.getItem('nesty_auth_token') || '';
+      const headers = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+      const res = await fetch('/api/admin/daily-reports/generate-now', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ date: targetDate }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCurrentDailyReport(data.report);
+        setReportActionMsg(`Report for ${targetDate} generated successfully.`);
+        fetchDailyReports(targetDate);
+      } else {
+        setReportActionMsg(`Error: ${data.message}`);
+      }
+    } catch (err: any) {
+      setReportActionMsg(`Failed: ${err.message}`);
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
+
+  const downloadReportCsv = async (date = selectedReportDate) => {
+    try {
+      const token = localStorage.getItem('nesty_web_auth_token') || localStorage.getItem('nesty_auth_token') || '';
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const res = await fetch(`/api/admin/daily-reports/${date}/csv`, { headers });
+      if (!res.ok) throw new Error('Failed to download CSV');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `nesty-daily-sales-${date}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(`Could not download CSV: ${err.message}`);
+    }
+  };
+
+  const fetchPosDevices = async () => {
+    try {
+      const token = localStorage.getItem('nesty_web_auth_token') || localStorage.getItem('nesty_auth_token') || '';
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const res = await fetch('/api/admin/pos-devices', { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) setPosDevices(data.devices || []);
+      }
+    } catch (err) {
+      console.error('Failed to load POS devices:', err);
+    }
+  };
+
+  const handleRevokeDevice = async (deviceId: string) => {
+    if (!confirm(`Are you sure you want to revoke POS terminal ${deviceId}? It will immediately be blocked from processing orders.`)) return;
+    try {
+      const token = localStorage.getItem('nesty_web_auth_token') || localStorage.getItem('nesty_auth_token') || '';
+      const res = await fetch(`/api/admin/pos-devices/${encodeURIComponent(deviceId)}/revoke`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        fetchPosDevices();
+      }
+    } catch (err) {
+      console.error('Failed to revoke device:', err);
+    }
+  };
+
+  const handleActivateDevice = async (deviceId: string) => {
+    try {
+      const token = localStorage.getItem('nesty_web_auth_token') || localStorage.getItem('nesty_auth_token') || '';
+      const res = await fetch(`/api/admin/pos-devices/${encodeURIComponent(deviceId)}/activate`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        fetchPosDevices();
+      }
+    } catch (err) {
+      console.error('Failed to activate device:', err);
+    }
+  };
+
+  const fetchSecurityAlerts = async () => {
+    try {
+      const token = localStorage.getItem('nesty_web_auth_token') || localStorage.getItem('nesty_auth_token') || '';
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const res = await fetch('/api/admin/security-alerts', { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) setSecurityAlerts(data.alerts || []);
+      }
+    } catch (err) {
+      console.error('Failed to load security alerts:', err);
+    }
+  };
+
+  const handleResolveAlert = async (alertId: string) => {
+    try {
+      const token = localStorage.getItem('nesty_web_auth_token') || localStorage.getItem('nesty_auth_token') || '';
+      const res = await fetch(`/api/admin/security-alerts/${encodeURIComponent(alertId)}/resolve`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        fetchSecurityAlerts();
+      }
+    } catch (err) {
+      console.error('Failed to resolve alert:', err);
+    }
+  };
 
   // Revenue Analytics state (Requirements #3, #4, #5, #6, #7, #9)
   const getTodayISTDate = () => {
@@ -381,10 +551,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   useEffect(() => {
     if (activeTab === 'REVENUE') {
       fetchRevenueAnalytics();
+    } else if (activeTab === 'DAILY_REPORT') {
+      fetchDailyReports(selectedReportDate);
     } else if (activeTab === 'AUDIT_LOGS') {
       fetchAuditLogs(auditActionFilter);
+      fetchPosDevices();
+      fetchSecurityAlerts();
     }
-  }, [activeTab, revenueDate, revenueStatusFilter, auditActionFilter]);
+  }, [activeTab, revenueDate, revenueStatusFilter, auditActionFilter, selectedReportDate]);
 
   const handleRevenueSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -580,6 +754,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               onClick={() => {
                 onRefreshAll();
                 if (activeTab === 'REVENUE') fetchRevenueAnalytics();
+                if (activeTab === 'DAILY_REPORT') fetchDailyReports(selectedReportDate);
+                if (activeTab === 'AUDIT_LOGS') {
+                  fetchAuditLogs(auditActionFilter);
+                  fetchPosDevices();
+                  fetchSecurityAlerts();
+                }
               }}
               data-testid="admin_refresh_button"
               className="px-4 py-2.5 rounded-2xl bg-nesty-cream/15 hover:bg-nesty-cream/25 border border-nesty-gold text-xs font-bold flex items-center gap-2 transition"
@@ -704,6 +884,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             label: 'Revenue',
             icon: <IndianRupee className="w-4 h-4" />,
             testId: 'admin_tab_revenue',
+          },
+          {
+            id: 'DAILY_REPORT' as const,
+            label: '5:30 PM Daily Report',
+            icon: <Calendar className="w-4 h-4" />,
+            testId: 'admin_tab_daily_report',
           },
           {
             id: 'STUDENTS' as const,
@@ -1686,6 +1872,405 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         </div>
       )}
 
+      {/* SECTION: 5:30 PM AUTOMATED DAILY SALES REPORT (Requirement #8) */}
+      {activeTab === 'DAILY_REPORT' && (
+        <div className="space-y-6" data-testid="admin_daily_report_section">
+          {/* Header Card */}
+          <div className="bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-6 shadow-sm">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <div className="w-9 h-9 rounded-2xl bg-nesty-burgundy text-nesty-gold flex items-center justify-center font-black">
+                    <Calendar className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-extrabold text-nesty-burgundy">
+                      5:30 PM Daily Sales Report & Audit Ledger
+                    </h2>
+                    <p className="text-xs text-nesty-textSecondary mt-0.5">
+                      Automated end-of-day sales reconciliation for canteen closing at exactly 5:30 PM IST.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 mt-3 text-xs">
+                  <span className="px-3 py-1 rounded-full bg-nesty-burgundy/10 text-nesty-burgundy font-bold border border-nesty-burgundy/20 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5" />
+                    Operational Hours: 08:00 AM – 05:30 PM IST
+                  </span>
+                  <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 font-bold border border-emerald-300 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    Automatic Server Trigger (Zero Manual Effort)
+                  </span>
+                </div>
+              </div>
+
+              {/* Action Controls */}
+              <div className="flex flex-wrap items-center gap-2.5">
+                <input
+                  type="date"
+                  value={selectedReportDate}
+                  onChange={(e) => {
+                    setSelectedReportDate(e.target.value);
+                    fetchDailyReports(e.target.value);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-nesty-creamElevated border border-nesty-gold text-xs font-bold text-nesty-burgundy shadow-sm focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleGenerateReportNow(selectedReportDate)}
+                  disabled={generatingReport}
+                  className="px-4 py-2.5 rounded-xl bg-nesty-burgundy hover:bg-nesty-burgundyDark text-nesty-cream font-extrabold text-xs flex items-center gap-2 transition shadow-sm disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${generatingReport ? 'animate-spin' : ''}`} />
+                  <span>{generatingReport ? 'Generating...' : 'Generate Snapshot'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadReportCsv(selectedReportDate)}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs flex items-center gap-2 transition shadow-sm"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-4 py-2.5 rounded-xl bg-nesty-creamElevated hover:bg-nesty-cream border border-nesty-gold text-nesty-burgundy font-extrabold text-xs flex items-center gap-2 transition shadow-sm"
+                >
+                  <Printer className="w-3.5 h-3.5 text-nesty-gold" />
+                  <span>Print Report</span>
+                </button>
+              </div>
+            </div>
+
+            {reportActionMsg && (
+              <div className="mt-4 p-3 rounded-xl bg-emerald-50 border border-emerald-300 text-xs text-emerald-800 font-bold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>{reportActionMsg}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Daily Report Content or Loading */}
+          {dailyReportLoading && !currentDailyReport ? (
+            <div className="p-12 text-center bg-nesty-creamSurface rounded-3xl border border-nesty-gold">
+              <RefreshCw className="w-8 h-8 text-nesty-gold animate-spin mx-auto mb-3" />
+              <p className="text-sm font-bold text-nesty-burgundy">Loading Daily Sales Report...</p>
+            </div>
+          ) : currentDailyReport ? (
+            <div className="space-y-6">
+              {/* KPI Summary Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="p-4 rounded-2xl bg-nesty-creamSurface border border-nesty-gold shadow-sm">
+                  <div className="text-[11px] font-bold text-nesty-textSecondary uppercase">Net Revenue (Collected)</div>
+                  <div className="text-2xl font-black text-emerald-700 mt-1">
+                    ₹{currentDailyReport.revenueSummary?.netRevenue || 0}
+                  </div>
+                  <div className="text-[11px] text-nesty-textSecondary mt-0.5">
+                    Gross ₹{currentDailyReport.revenueSummary?.grossSales || 0} – Disc ₹{currentDailyReport.revenueSummary?.totalDiscounts || 0}
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-nesty-creamSurface border border-nesty-gold shadow-sm">
+                  <div className="text-[11px] font-bold text-nesty-textSecondary uppercase">Total Units Sold</div>
+                  <div className="text-2xl font-black text-nesty-burgundy mt-1">
+                    {currentDailyReport.orderLedger?.totalUnitsSold || 0} units
+                  </div>
+                  <div className="text-[11px] text-nesty-textSecondary mt-0.5">
+                    Across {currentDailyReport.businessSummary?.totalCatalogProducts || menuItems.length} catalog items
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-nesty-creamSurface border border-nesty-gold shadow-sm">
+                  <div className="text-[11px] font-bold text-nesty-textSecondary uppercase">Orders Reconciled</div>
+                  <div className="text-2xl font-black text-nesty-burgundy mt-1">
+                    {currentDailyReport.orderLedger?.totalOrders || 0}
+                  </div>
+                  <div className="text-[11px] text-nesty-textSecondary mt-0.5">
+                    {currentDailyReport.orderLedger?.completedOrders || 0} Claimed · {currentDailyReport.orderLedger?.activeOrders || 0} Pending
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-nesty-creamSurface border border-nesty-gold shadow-sm">
+                  <div className="text-[11px] font-bold text-nesty-textSecondary uppercase">Reconciliation Status</div>
+                  <div className="mt-1">
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-black uppercase ${
+                      currentDailyReport.finalTotals?.reconciliationStatus === 'BALANCED'
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        : 'bg-rose-100 text-rose-800 border border-rose-300'
+                    }`}>
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      {currentDailyReport.finalTotals?.reconciliationStatus || 'BALANCED'}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-nesty-textSecondary mt-0.5">
+                    Best: {currentDailyReport.orderLedger?.bestSeller?.name || 'None'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Product-Wise Sales Table (All Catalog Items) */}
+              <div className="bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-6 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-base font-extrabold text-nesty-burgundy">
+                      Product-Wise Sales Table (All Catalog Items)
+                    </h3>
+                    <p className="text-xs text-nesty-textSecondary">
+                      Every product ranked from highest units sold to lowest. Zero-sale products are explicitly audited.
+                    </p>
+                  </div>
+                  <span className="px-3 py-1 rounded-xl bg-nesty-creamElevated border border-nesty-gold text-xs font-extrabold text-nesty-burgundy">
+                    {currentDailyReport.productWiseSales?.length || 0} Products Audited
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-nesty-creamElevated text-nesty-burgundy font-black uppercase text-[11px] border-b border-nesty-gold/30">
+                      <tr>
+                        <th className="py-3 px-3">Rank</th>
+                        <th className="py-3 px-4">Product Name</th>
+                        <th className="py-3 px-3">Category</th>
+                        <th className="py-3 px-3">Diet</th>
+                        <th className="py-3 px-3 text-right">Unit Price</th>
+                        <th className="py-3 px-3 text-center">Units Sold</th>
+                        <th className="py-3 px-4 text-right">Total Sales</th>
+                        <th className="py-3 px-3 text-right">Revenue Share</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-nesty-gold/20 font-medium">
+                      {(currentDailyReport.productWiseSales || []).map((prod: any) => {
+                        const isBestSeller = prod.rank === 1 && prod.unitsSold > 0;
+                        return (
+                          <tr key={prod.id} className={`hover:bg-nesty-cream/40 transition ${isBestSeller ? 'bg-amber-50/50 font-bold' : ''}`}>
+                            <td className="py-3 px-3">
+                              <span className={`w-6 h-6 rounded-full inline-flex items-center justify-center font-extrabold text-[11px] ${
+                                prod.rank === 1 && prod.unitsSold > 0
+                                  ? 'bg-amber-400 text-amber-950 font-black'
+                                  : 'bg-nesty-creamElevated text-nesty-textSecondary'
+                              }`}>
+                                {prod.rank}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="font-extrabold text-nesty-burgundy flex items-center gap-1.5">
+                                <span>{prod.name}</span>
+                                {isBestSeller && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-200 text-amber-900 font-black">
+                                    TOP SELLER
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3 px-3 text-nesty-textSecondary">{prod.category}</td>
+                            <td className="py-3 px-3">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                prod.isVeg ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                              }`}>
+                                {prod.isVeg ? 'Veg' : 'Non-Veg'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-right font-extrabold text-nesty-burgundy">
+                              ₹{prod.unitPrice}
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              <span className={`px-2.5 py-1 rounded-lg text-xs font-black ${
+                                prod.unitsSold > 0
+                                  ? 'bg-nesty-burgundy text-nesty-cream'
+                                  : 'bg-gray-100 text-gray-500'
+                              }`}>
+                                {prod.unitsSold}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-right font-black text-nesty-burgundy">
+                              ₹{prod.totalSales}
+                            </td>
+                            <td className="py-3 px-3 text-right font-bold text-nesty-textSecondary">
+                              {prod.revenuePercentage}%
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Payment Methods & Order Reconciliation Ledger Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                {/* Payment Breakdown Card */}
+                <div className="bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-5 shadow-sm">
+                  <h4 className="text-sm font-extrabold text-nesty-burgundy mb-3 flex items-center gap-2">
+                    <CreditCard className="w-4 h-4 text-nesty-gold" />
+                    Payment Method Breakdown
+                  </h4>
+                  <div className="space-y-2.5 text-xs">
+                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-nesty-creamElevated">
+                      <span className="font-bold text-nesty-burgundy">UPI (GPay / PhonePe / Paytm)</span>
+                      <div className="text-right">
+                        <span className="font-extrabold text-emerald-700">₹{currentDailyReport.revenueSummary?.paymentMethodBreakdown?.upi?.amount || 0}</span>
+                        <span className="text-nesty-textSecondary ml-2 font-normal">({currentDailyReport.revenueSummary?.paymentMethodBreakdown?.upi?.count || 0} txns)</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-nesty-creamElevated">
+                      <span className="font-bold text-nesty-burgundy">Cards (Debit / Credit)</span>
+                      <div className="text-right">
+                        <span className="font-extrabold text-emerald-700">₹{currentDailyReport.revenueSummary?.paymentMethodBreakdown?.card?.amount || 0}</span>
+                        <span className="text-nesty-textSecondary ml-2 font-normal">({currentDailyReport.revenueSummary?.paymentMethodBreakdown?.card?.count || 0} txns)</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-nesty-creamElevated">
+                      <span className="font-bold text-nesty-burgundy">Cash (POS Machine Counter)</span>
+                      <div className="text-right">
+                        <span className="font-extrabold text-emerald-700">₹{currentDailyReport.revenueSummary?.paymentMethodBreakdown?.cash?.amount || 0}</span>
+                        <span className="text-nesty-textSecondary ml-2 font-normal">({currentDailyReport.revenueSummary?.paymentMethodBreakdown?.cash?.count || 0} txns)</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-nesty-creamElevated">
+                      <span className="font-bold text-nesty-burgundy">Net Banking & Others</span>
+                      <div className="text-right">
+                        <span className="font-extrabold text-emerald-700">₹{currentDailyReport.revenueSummary?.paymentMethodBreakdown?.netbanking?.amount || 0}</span>
+                        <span className="text-nesty-textSecondary ml-2 font-normal">({currentDailyReport.revenueSummary?.paymentMethodBreakdown?.netbanking?.count || 0} txns)</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Audit Reconciliation Ledger Card */}
+                <div className="bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-5 shadow-sm">
+                  <h4 className="text-sm font-extrabold text-nesty-burgundy mb-3 flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-nesty-gold" />
+                    End-of-Day Audit Verification
+                  </h4>
+                  <div className="space-y-2 text-xs">
+                    <div className="flex justify-between py-1.5 border-b border-nesty-gold/20">
+                      <span className="text-nesty-textSecondary">Total Orders Placed Today:</span>
+                      <span className="font-bold text-nesty-burgundy">{currentDailyReport.orderLedger?.totalOrders || 0}</span>
+                    </div>
+                    <div className="flex justify-between py-1.5 border-b border-nesty-gold/20">
+                      <span className="text-nesty-textSecondary">Claimed / Collected Bills:</span>
+                      <span className="font-bold text-emerald-700">{currentDailyReport.orderLedger?.completedOrders || 0}</span>
+                    </div>
+                    <div className="flex justify-between py-1.5 border-b border-nesty-gold/20">
+                      <span className="text-nesty-textSecondary">Active / Uncollected Bills:</span>
+                      <span className="font-bold text-amber-700">{currentDailyReport.orderLedger?.activeOrders || 0}</span>
+                    </div>
+                    <div className="flex justify-between py-1.5 border-b border-nesty-gold/20">
+                      <span className="text-nesty-textSecondary">Cancelled Orders:</span>
+                      <span className="font-bold text-rose-700">{currentDailyReport.orderLedger?.cancelledOrders || 0}</span>
+                    </div>
+                    <div className="flex justify-between py-1.5 border-b border-nesty-gold/20">
+                      <span className="text-nesty-textSecondary">Report Trigger Method:</span>
+                      <span className="font-mono font-bold text-nesty-burgundy">{currentDailyReport.triggerType}</span>
+                    </div>
+                    <div className="mt-3 p-2.5 rounded-xl bg-emerald-50 text-[11px] text-emerald-800 font-medium">
+                      ✓ {currentDailyReport.finalTotals?.notes || 'Reconciliation verified against verified gateway signatures and POS logs.'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Historical Daily Reports Archive Table */}
+              <div className="bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-6 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-base font-extrabold text-nesty-burgundy">
+                      Historical Daily Reports Archive
+                    </h3>
+                    <p className="text-xs text-nesty-textSecondary">
+                      Permanent records of past 5:30 PM closing reports stored indefinitely.
+                    </p>
+                  </div>
+                  <span className="px-3 py-1 rounded-xl bg-nesty-creamElevated border border-nesty-gold text-xs font-bold text-nesty-burgundy">
+                    {dailyReportsList.length} Reports Archived
+                  </span>
+                </div>
+
+                {dailyReportsList.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-nesty-textSecondary">
+                    No historical reports generated yet. Click "Generate Snapshot" above to create today's report.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-nesty-creamElevated text-nesty-burgundy font-black uppercase text-[11px] border-b border-nesty-gold/30">
+                        <tr>
+                          <th className="py-3 px-3">Business Date</th>
+                          <th className="py-3 px-3">Report ID</th>
+                          <th className="py-3 px-3 text-right">Net Revenue</th>
+                          <th className="py-3 px-3 text-center">Orders</th>
+                          <th className="py-3 px-3 text-center">Units Sold</th>
+                          <th className="py-3 px-3">Best Seller</th>
+                          <th className="py-3 px-3">Trigger</th>
+                          <th className="py-3 px-3 text-center">Status</th>
+                          <th className="py-3 px-3 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-nesty-gold/20 font-medium">
+                        {dailyReportsList.map((r: any) => (
+                          <tr key={r.reportId || r.date} className="hover:bg-nesty-cream/40 transition">
+                            <td className="py-3 px-3 font-extrabold text-nesty-burgundy">{r.date}</td>
+                            <td className="py-3 px-3 font-mono text-nesty-textSecondary">{r.reportId}</td>
+                            <td className="py-3 px-3 text-right font-black text-emerald-700">₹{r.netRevenue}</td>
+                            <td className="py-3 px-3 text-center font-bold">{r.totalOrders}</td>
+                            <td className="py-3 px-3 text-center font-bold">{r.totalUnitsSold}</td>
+                            <td className="py-3 px-3 text-nesty-burgundy font-semibold">{r.bestSeller || '—'}</td>
+                            <td className="py-3 px-3 text-nesty-textSecondary text-[10px] uppercase font-mono">{r.triggerType}</td>
+                            <td className="py-3 px-3 text-center">
+                              <span className="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-100 text-emerald-800">
+                                {r.reconciliationStatus}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedReportDate(r.date);
+                                    fetchDailyReports(r.date);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-nesty-burgundy text-nesty-cream text-[10px] font-bold hover:bg-nesty-burgundyDark transition"
+                                >
+                                  View
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => downloadReportCsv(r.date)}
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-700 text-white text-[10px] font-bold hover:bg-emerald-800 transition"
+                                >
+                                  CSV
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="p-12 text-center bg-nesty-creamSurface rounded-3xl border border-nesty-gold">
+              <Calendar className="w-10 h-10 text-nesty-gold mx-auto mb-3" />
+              <h3 className="text-base font-extrabold text-nesty-burgundy">No Report Available For {selectedReportDate}</h3>
+              <p className="text-xs text-nesty-textSecondary max-w-md mx-auto mt-1 mb-4">
+                The automatic report will be generated at 5:30 PM IST today, or you can generate an on-demand snapshot right now.
+              </p>
+              <button
+                type="button"
+                onClick={() => handleGenerateReportNow(selectedReportDate)}
+                disabled={generatingReport}
+                className="px-5 py-2.5 rounded-2xl bg-nesty-burgundy hover:bg-nesty-burgundyDark text-nesty-cream font-extrabold text-xs transition shadow-sm"
+              >
+                {generatingReport ? 'Generating Snapshot...' : `Generate Snapshot for ${selectedReportDate}`}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* SECTION 4: STUDENTS LIST */}
       {activeTab === 'STUDENTS' && (
         <div className="space-y-4">
@@ -1923,6 +2508,127 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       {/* Audit Logs Section (Security Checklist Item #12) */}
       {activeTab === 'AUDIT_LOGS' && (
         <div className="space-y-6" data-testid="admin_audit_logs_panel">
+          {/* Security Alerts Monitoring Card */}
+          <div className="bg-nesty-creamSurface border border-nesty-gold rounded-[28px] p-6 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-nesty-burgundy" />
+                <h3 className="text-base font-extrabold text-nesty-burgundy">Security Alerts & Threat Prevention</h3>
+              </div>
+              <span className={`px-3 py-1 rounded-full text-xs font-black ${
+                securityAlerts.filter((a) => a.status === 'OPEN').length > 0
+                  ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                  : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+              }`}>
+                {securityAlerts.filter((a) => a.status === 'OPEN').length} Open Alerts
+              </span>
+            </div>
+
+            {securityAlerts.length === 0 ? (
+              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 font-bold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>All security checks nominal: Zero intrusion, brute-force, or price tampering alerts recorded.</span>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {securityAlerts.slice(0, 5).map((alert) => (
+                  <div key={alert.id} className="p-3.5 rounded-2xl bg-nesty-creamElevated border border-nesty-creamBorder flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                          alert.severity === 'CRITICAL' ? 'bg-rose-600 text-white' : alert.severity === 'HIGH' ? 'bg-amber-600 text-white' : 'bg-blue-600 text-white'
+                        }`}>
+                          {alert.severity}
+                        </span>
+                        <span className="font-extrabold text-nesty-burgundy">{alert.type}</span>
+                        <span className="text-[11px] text-nesty-textSecondary">({new Date(alert.timestamp).toLocaleTimeString()})</span>
+                      </div>
+                      <p className="text-nesty-textSecondary mt-1">{alert.description}</p>
+                    </div>
+                    {alert.status === 'OPEN' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleResolveAlert(alert.id)}
+                        className="px-3 py-1.5 rounded-xl bg-nesty-burgundy text-nesty-cream text-[11px] font-bold self-start sm:self-auto hover:bg-nesty-burgundyDark transition"
+                      >
+                        Resolve
+                      </button>
+                    ) : (
+                      <span className="text-[11px] font-bold text-emerald-700">Resolved</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* POS Terminal Hardware Registry Card */}
+          <div className="bg-nesty-creamSurface border border-nesty-gold rounded-[28px] p-6 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-base font-extrabold text-nesty-burgundy">POS Terminal Hardware Registry</h3>
+                <p className="text-xs text-nesty-textSecondary">
+                  Model 1008 handheld vending terminal authorization & hardware token controls.
+                </p>
+              </div>
+              <span className="px-3 py-1 rounded-xl bg-nesty-creamElevated border border-nesty-gold text-xs font-bold text-nesty-burgundy">
+                {posDevices.length} Terminals Registered
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-nesty-creamElevated text-nesty-burgundy font-black uppercase text-[11px] border-b border-nesty-gold/30">
+                  <tr>
+                    <th className="py-2.5 px-3">Device ID</th>
+                    <th className="py-2.5 px-3">Terminal Name</th>
+                    <th className="py-2.5 px-3">Hardware Model</th>
+                    <th className="py-2.5 px-3 text-center">Status</th>
+                    <th className="py-2.5 px-3 text-right">Hardware Control</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-nesty-gold/20 font-medium">
+                  {posDevices.map((dev) => (
+                    <tr key={dev.deviceId} className="hover:bg-nesty-cream/30 transition">
+                      <td className="py-3 px-3 font-mono font-bold text-nesty-burgundy">{dev.deviceId}</td>
+                      <td className="py-3 px-3 font-semibold">{dev.name}</td>
+                      <td className="py-3 px-3 text-nesty-textSecondary">{dev.model}</td>
+                      <td className="py-3 px-3 text-center">
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                          dev.status === 'ACTIVE'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                            : 'bg-rose-100 text-rose-800 border border-rose-300'
+                        }`}>
+                          {dev.status}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 text-right">
+                        {dev.status === 'ACTIVE' ? (
+                          <button
+                            type="button"
+                            onClick={() => handleRevokeDevice(dev.deviceId)}
+                            className="px-2.5 py-1 rounded-lg bg-rose-700 text-white text-[10px] font-extrabold hover:bg-rose-800 transition shadow-sm"
+                          >
+                            Revoke Terminal
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleActivateDevice(dev.deviceId)}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-700 text-white text-[10px] font-extrabold hover:bg-emerald-800 transition shadow-sm"
+                          >
+                            Reactivate Terminal
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Audit Logs Table */}
           <div className="bg-nesty-creamSurface border border-nesty-creamBorder rounded-[28px] p-6 shadow-sm">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
