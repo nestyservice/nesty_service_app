@@ -450,61 +450,6 @@ const INITIAL_SEED_DATA = {
         : hashPassword(getAdminDefaultPassword() || INSECURE_DEFAULT_ADMIN_PASSWORD),
       createdAt: '2026-09-01T08:00:00Z',
     },
-    {
-      email: 'student@cvr.ac.in',
-      id: 'usr_student_01',
-      name: 'Aarav Reddy',
-      phone: '9123456780',
-      rollNo: '22B81A0501',
-      role: 'student',
-      emailVerified: true,
-      passwordHash: hashPassword('student123'),
-      createdAt: '2026-09-10T09:30:00Z',
-    },
-    {
-      email: '22b81a0501@cvr.ac.in',
-      id: 'usr_student_02',
-      name: 'Nikilesh Kumar',
-      phone: '9848012345',
-      rollNo: '22B81A0501',
-      role: 'student',
-      emailVerified: true,
-      passwordHash: hashPassword('student123'),
-      createdAt: '2026-09-12T11:15:00Z',
-    },
-    {
-      email: 'test_student_1791714438197@cvr.ac.in',
-      id: 'usr_45dea75b',
-      name: 'Priya Sharma',
-      phone: '9876501234',
-      rollNo: '23B81A3913',
-      role: 'student',
-      emailVerified: true,
-      passwordHash: 'bdc5fbf2ec071c638c21bbe78e8c067894072b8a6bc6a6751b08540476f0f780',
-      createdAt: '2026-10-11T10:27:18.198Z',
-    },
-    {
-      email: 'fresh_student_1791725806679@cvr.ac.in',
-      id: 'usr_7ed9f61d',
-      name: 'Fresh Student',
-      phone: '9848012345',
-      rollNo: '24B81A4430',
-      role: 'student',
-      emailVerified: true,
-      passwordHash: '5b1a0bb5735c558becb2cf32633ae3682d7d0df97940a0980053401fb0094812',
-      createdAt: '2026-10-11T13:36:46.682Z',
-    },
-    {
-      email: 'test_student_1791823480136@cvr.ac.in',
-      id: 'usr_78f8c4a0',
-      name: 'Test Student',
-      phone: '9848012345',
-      rollNo: '24B81A2115',
-      role: 'student',
-      emailVerified: true,
-      passwordHash: '8f349c200317636703e9eb6551054fac31b6c98dd7c8f98d8adbb1e1dd599af1',
-      createdAt: '2026-10-12T16:44:40.201Z',
-    },
   ],
   coupons: [
     {
@@ -513,7 +458,7 @@ const INITIAL_SEED_DATA = {
       discountPercent: 20,
       maxDiscount: 40,
       minOrderAmount: 40,
-      usageCount: 14,
+      usageCount: 0,
     },
     {
       id: 'cpn_campus10',
@@ -521,97 +466,19 @@ const INITIAL_SEED_DATA = {
       discountPercent: 10,
       maxDiscount: 25,
       minOrderAmount: 25,
-      usageCount: 29,
+      usageCount: 0,
     },
   ],
   announcements: [
     {
       id: 'ann_welcome_nesty',
       title: 'Welcome to Nesty Campus Food Ordering!',
-      message: 'Fresh Samosas & Puffs are hot out of the oven. Order now and pick up instantly with your Order ID or Transaction ID!',
+      message: 'Fresh Samosas & Puffs are hot out of the oven. Order now and pick up instantly with your 3-character POS Bill Token!',
       createdAt: '2026-10-09T09:00:00Z',
     },
   ],
-  orders: [
-    {
-      id: 'NST-8492',
-      studentEmail: 'student@cvr.ac.in',
-      studentName: 'Aarav Reddy',
-      studentPhone: '9123456780',
-      items: [
-        { id: 'veg_puff', name: 'Veg Puff', price: 25, quantity: 2, isVeg: true },
-        { id: 'samosa', name: 'Samosa', price: 12, quantity: 2, isVeg: true },
-      ],
-      totalAmount: 74,
-      discount: 0,
-      finalAmount: 74,
-      paymentMethod: 'Razorpay UPI',
-      transactionId: 'TXN-RZP-982341',
-      razorpayOrderId: 'order_P9xK2m81L',
-      paymentStatus: 'PAID',
-      orderStatus: 'PENDING_PICKUP',
-      billStatus: 'ACTIVE',
-      billCollectedAt: null,
-      claimedBy: null,
-      claimedAt: null,
-      createdAt: '2026-10-09T10:30:00Z',
-    },
-    {
-      id: 'NST-7910',
-      studentEmail: 'student@cvr.ac.in',
-      studentName: 'Aarav Reddy',
-      studentPhone: '9123456780',
-      items: [
-        { id: 'chicken_puff', name: 'Chicken Puff', price: 30, quantity: 1, isVeg: false },
-        { id: 'egg_puff', name: 'Egg Puff', price: 25, quantity: 1, isVeg: false },
-      ],
-      totalAmount: 55,
-      discount: 5,
-      finalAmount: 50,
-      paymentMethod: 'Razorpay UPI',
-      transactionId: 'TXN-RZP-774120',
-      razorpayOrderId: 'order_P8mN1k72J',
-      paymentStatus: 'PAID',
-      orderStatus: 'CLAIMED',
-      billStatus: 'EXPIRED',
-      billCollectedAt: '2026-10-08T13:20:00Z',
-      claimedBy: 'Canteen Staff',
-      claimedAt: '2026-10-08T13:20:00Z',
-      createdAt: '2026-10-08T13:05:00Z',
-    },
-  ],
-  payments: [
-    {
-      id: 'pmt_RZP_982341',
-      orderId: 'NST-8492',
-      studentEmail: 'student@cvr.ac.in',
-      studentName: 'Aarav Reddy',
-      amount: 74,
-      currency: 'INR',
-      paymentMethod: 'Razorpay UPI',
-      transactionId: 'TXN-RZP-982341',
-      razorpayOrderId: 'order_P9xK2m81L',
-      status: 'PAID',
-      billStatus: 'ACTIVE',
-      billCollectedAt: null,
-      createdAt: '2026-10-09T10:30:00Z',
-    },
-    {
-      id: 'pmt_RZP_774120',
-      orderId: 'NST-7910',
-      studentEmail: 'student@cvr.ac.in',
-      studentName: 'Aarav Reddy',
-      amount: 50,
-      currency: 'INR',
-      paymentMethod: 'Razorpay UPI',
-      transactionId: 'TXN-RZP-774120',
-      razorpayOrderId: 'order_P8mN1k72J',
-      status: 'PAID',
-      billStatus: 'EXPIRED',
-      billCollectedAt: '2026-10-08T13:20:00Z',
-      createdAt: '2026-10-08T13:05:00Z',
-    },
-  ],
+  orders: [],
+  payments: [],
   dailyTokens: [],
   auditLogs: [],
 };
@@ -4069,18 +3936,29 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
           console.warn('[SUPABASE] Startup user sync notice:', err.message);
         });
 
-        // Reconcile cloud-persisted historical orders and payments from Supabase
+        // Reconcile cloud-persisted historical orders and payments from Supabase (ignoring archived test records)
         fetchPersistentHistoryFromSupabase()
           .then(({ orders: cloudOrders, payments: cloudPayments }) => {
-            if (cloudOrders.length > 0 || cloudPayments.length > 0) {
+            const archivedEmails = new Set([
+              'student@cvr.ac.in',
+              '22b81a0501@cvr.ac.in',
+              ...((db.archivedTestRecords && db.archivedTestRecords.users) || []).map((u) => (u.email || '').toLowerCase()),
+            ]);
+            const filteredCloudOrders = (cloudOrders || []).filter(
+              (co) => !archivedEmails.has((co.studentEmail || '').toLowerCase()) && !co.studentName?.toLowerCase().includes('aarav') && !co.studentName?.toLowerCase().includes('nikilesh')
+            );
+            const filteredCloudPayments = (cloudPayments || []).filter(
+              (cp) => !archivedEmails.has((cp.studentEmail || '').toLowerCase()) && !cp.studentName?.toLowerCase().includes('aarav') && !cp.studentName?.toLowerCase().includes('nikilesh')
+            );
+            if (filteredCloudOrders.length > 0 || filteredCloudPayments.length > 0) {
               let changed = false;
-              for (const co of cloudOrders) {
+              for (const co of filteredCloudOrders) {
                 if (!db.orders.some((o) => o.id === co.id)) {
                   db.orders.push(co);
                   changed = true;
                 }
               }
-              for (const cp of cloudPayments) {
+              for (const cp of filteredCloudPayments) {
                 if (!db.payments.some((p) => p.id === cp.id)) {
                   db.payments.push(cp);
                   changed = true;
@@ -4088,7 +3966,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
               }
               if (changed) {
                 saveDb(db);
-                console.log(`[SUPABASE] Reconciled ${cloudOrders.length} orders & ${cloudPayments.length} payments into local database.`);
+                console.log(`[SUPABASE] Reconciled ${filteredCloudOrders.length} genuine orders & ${filteredCloudPayments.length} genuine payments into local database.`);
               }
             }
           })

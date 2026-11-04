@@ -929,10 +929,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
           {filteredOrders.length === 0 ? (
             <div className="bg-nesty-creamSurface border border-nesty-creamBorder rounded-3xl p-12 text-center">
-              <Receipt className="w-12 h-12 text-nesty-goldDark mx-auto mb-2" />
-              <h3 className="text-base font-extrabold text-nesty-burgundy">No orders matching criteria</h3>
+              <Receipt className="w-12 h-12 text-nesty-goldDark mx-auto mb-2 opacity-60" />
+              <h3 className="text-base font-extrabold text-nesty-burgundy">
+                {orders.length === 0 ? 'No campus orders placed yet' : 'No orders matching criteria'}
+              </h3>
               <p className="text-xs text-nesty-textSecondary mt-1">
-                Try modifying your search term or clearing the status filters.
+                {orders.length === 0
+                  ? 'Confirmed student canteen orders will be listed here in real time.'
+                  : 'Try modifying your search term or clearing the status filters.'}
               </p>
             </div>
           ) : (
@@ -1682,26 +1686,74 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         </div>
       )}
 
-      {/* SECTION 4: STUDENTS LIST (No blocks, No coins) */}
+      {/* SECTION 4: STUDENTS LIST */}
       {activeTab === 'STUDENTS' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {students.map((stu) => (
-            <div
-              key={stu.email}
-              className="bg-nesty-creamSurface border border-nesty-gold rounded-2xl p-4 flex items-center justify-between"
-            >
-              <div>
-                <div className="text-sm font-extrabold text-nesty-burgundy">{stu.name}</div>
-                <div className="text-xs text-nesty-textSecondary">{stu.email}</div>
-                <div className="text-[11px] font-semibold text-nesty-textPrimary mt-1">
-                  Roll No: {stu.rollNo || 'N/A'} {stu.phone ? `• ${stu.phone}` : ''}
-                </div>
-              </div>
-              <div className="px-3 py-1.5 rounded-xl bg-nesty-goldLight border border-nesty-gold text-xs font-extrabold text-nesty-burgundyDark">
-                Student
-              </div>
+        <div className="space-y-4">
+          <div className="p-4 rounded-3xl bg-nesty-creamSurface border border-nesty-gold flex items-center justify-between shadow-sm">
+            <div>
+              <h3 className="text-base font-extrabold text-nesty-burgundy">Registered CVR Students</h3>
+              <p className="text-xs text-nesty-textSecondary mt-0.5">
+                Authoritative directory of registered students with their CVR College Roll Number and verified order history.
+              </p>
             </div>
-          ))}
+            <span className="px-3.5 py-1.5 rounded-2xl bg-nesty-burgundy text-nesty-cream text-xs font-black shadow-sm">
+              {students.length} Verified Students
+            </span>
+          </div>
+
+          {students.length === 0 ? (
+            <div className="bg-nesty-creamSurface border border-nesty-creamBorder rounded-3xl p-12 text-center shadow-sm">
+              <Users className="w-12 h-12 text-nesty-goldDark mx-auto mb-2 opacity-60" />
+              <h3 className="text-base font-extrabold text-nesty-burgundy">No registered students yet</h3>
+              <p className="text-xs text-nesty-textSecondary mt-1">
+                Real student accounts will appear here automatically when students sign up with their CVR College email and ID.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {students.map((stu) => {
+                const stuOrders = orders.filter((o) => o.studentEmail === stu.email);
+                const paidStuOrders = stuOrders.filter((o) => o.paymentStatus === 'PAID' || o.paymentStatus === 'SUCCESS');
+                const totalSpent = paidStuOrders.reduce((sum, o) => sum + (o.finalAmount || 0), 0);
+                const effectiveRollNo = stu.rollNo || (stuOrders[0]?.studentRollNo || stuOrders[0]?.rollNo) || 'CVR Student';
+
+                return (
+                  <div
+                    key={stu.email}
+                    className="bg-nesty-creamSurface border border-nesty-gold rounded-3xl p-5 space-y-3 shadow-sm hover:shadow-md transition"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-base font-extrabold text-nesty-burgundy">{stu.name}</div>
+                        <div className="text-xs text-nesty-textSecondary">{stu.email}</div>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-xl bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-black uppercase">
+                        Verified
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-2xl bg-nesty-creamElevated border border-nesty-creamBorder flex items-center justify-between text-xs">
+                      <span className="font-bold text-nesty-textSecondary">CVR College ID:</span>
+                      <span className="font-mono font-black text-nesty-burgundy px-2 py-0.5 rounded-lg bg-nesty-gold/20 border border-nesty-gold/40">
+                        {effectiveRollNo}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-nesty-creamBorder text-xs text-nesty-textSecondary">
+                      <div>
+                        <span className="block text-[10px] uppercase font-bold">Confirmed Orders</span>
+                        <span className="font-extrabold text-nesty-textPrimary text-sm">{paidStuOrders.length}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] uppercase font-bold">Total Spent</span>
+                        <span className="font-extrabold text-nesty-burgundy text-sm">₹{totalSpent}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
