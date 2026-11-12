@@ -192,6 +192,18 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [annTitle, setAnnTitle] = useState('');
   const [annMsg, setAnnMsg] = useState('');
 
+  // Query authoritative server window status
+  useEffect(() => {
+    fetch('/api/admin/daily-reports/window-status')
+      .then((r) => r.json())
+      .then((data) => {
+        if (typeof data.isOpen === 'boolean') {
+          setIsReportWindowOpen(data.isOpen);
+        }
+      })
+      .catch(() => {});
+  }, [activeTab]);
+
   // 5:30 PM Daily Sales Report Engine State (Requirement #8)
   const [dailyReportsList, setDailyReportsList] = useState<any[]>([]);
   const [selectedReportDate, setSelectedReportDate] = useState<string>(() => {
@@ -205,6 +217,24 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [dailyReportLoading, setDailyReportLoading] = useState(false);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [reportActionMsg, setReportActionMsg] = useState<string | null>(null);
+  const [isReportWindowOpen, setIsReportWindowOpen] = useState<boolean>(() => {
+    try {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Kolkata',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(new Date());
+      const map: any = {};
+      for (const p of parts) map[p.type] = p.value;
+      const h = parseInt(map.hour, 10);
+      const m = parseInt(map.minute, 10);
+      return h === 17 && m >= 30;
+    } catch {
+      return false;
+    }
+  });
+  const [reportWindowMsg, setReportWindowMsg] = useState<string | null>(null);
 
   // POS Devices & Security Alerts State (OWASP MASVS / Requirement #3)
   const [posDevices, setPosDevices] = useState<any[]>([]);
@@ -218,17 +248,37 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
       const listRes = await fetch('/api/admin/daily-reports', { headers });
+      if (listRes.status === 403) {
+        const errData = await listRes.json().catch(() => ({}));
+        if (errData.code === 'REPORT_WINDOW_CLOSED') {
+          setIsReportWindowOpen(false);
+          setReportWindowMsg(errData.message || 'Daily sales reports are strictly accessible only between 5:30 PM and 6:00 PM IST.');
+          setDailyReportLoading(false);
+          return;
+        }
+      }
       if (listRes.ok) {
         const listData = await listRes.json();
         if (listData.success) {
+          setIsReportWindowOpen(true);
           setDailyReportsList(listData.reports || []);
         }
       }
 
       const reportRes = await fetch(`/api/admin/daily-reports/${date}`, { headers });
+      if (reportRes.status === 403) {
+        const errData = await reportRes.json().catch(() => ({}));
+        if (errData.code === 'REPORT_WINDOW_CLOSED') {
+          setIsReportWindowOpen(false);
+          setReportWindowMsg(errData.message || 'Daily sales reports are strictly accessible only between 5:30 PM and 6:00 PM IST.');
+          setDailyReportLoading(false);
+          return;
+        }
+      }
       if (reportRes.ok) {
         const reportData = await reportRes.json();
         if (reportData.success) {
+          setIsReportWindowOpen(true);
           setCurrentDailyReport(reportData.report);
         }
       }
@@ -254,7 +304,13 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         body: JSON.stringify({ date: targetDate }),
       });
       const data = await res.json();
+      if (data.code === 'REPORT_WINDOW_CLOSED') {
+        setIsReportWindowOpen(false);
+        setReportActionMsg(`Window Closed: ${data.message}`);
+        return;
+      }
       if (data.success) {
+        setIsReportWindowOpen(true);
         setCurrentDailyReport(data.report);
         setReportActionMsg(`Report for ${targetDate} generated successfully.`);
         fetchDailyReports(targetDate);
@@ -273,6 +329,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       const token = localStorage.getItem('nesty_web_auth_token') || localStorage.getItem('nesty_auth_token') || '';
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
       const res = await fetch(`/api/admin/daily-reports/${date}/csv`, { headers });
+      if (res.status === 403) {
+        const errData = await res.json().catch(() => ({}));
+        alert(errData.message || 'Daily sales reports are strictly accessible between 5:30 PM and 6:00 PM IST.');
+        return;
+      }
       if (!res.ok) throw new Error('Failed to download CSV');
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
@@ -1329,28 +1390,28 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               </div>
             </div>
 
-            {/* Successful Payments & Orders */}
+            {/* Registered Students (Lifetime & Today) */}
             <div
-              data-testid="revenue_metric_payments"
+              data-testid="revenue_metric_students"
               className="p-5 rounded-3xl bg-nesty-creamSurface border-[1.5px] border-nesty-gold shadow-sm flex flex-col justify-between"
             >
               <div>
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-extrabold text-nesty-textSecondary uppercase tracking-wider">
-                    Successful Payments
+                    Registered Students (Lifetime)
                   </span>
-                  <div className="w-8 h-8 rounded-xl bg-nesty-successBg flex items-center justify-center text-nesty-success">
-                    <CheckCircle2 className="w-4 h-4" />
+                  <div className="w-8 h-8 rounded-xl bg-nesty-gold/20 flex items-center justify-center text-nesty-burgundy">
+                    <Users className="w-4 h-4" />
                   </div>
                 </div>
-                <div className="text-2xl sm:text-3xl font-black text-nesty-textPrimary mt-2">
-                  {(revenueData ? revenueData.summary.totalSuccessfulPayments : fallbackSummary.totalPaidCount).toLocaleString('en-IN')}
+                <div className="text-2xl sm:text-3xl font-black text-nesty-burgundy mt-2">
+                  {(revenueData?.summary?.totalRegisteredStudents ?? students.length).toLocaleString('en-IN')}
                 </div>
               </div>
               <div className="mt-3 pt-3 border-t border-nesty-creamBorder flex items-center justify-between text-[11px] font-bold text-nesty-textSecondary">
-                <span>Total Orders Placed</span>
-                <span className="font-extrabold text-nesty-burgundy">
-                  {revenueData ? revenueData.summary.totalOrders : fallbackSummary.totalOrders}
+                <span>Registered Today</span>
+                <span className="font-extrabold text-emerald-700">
+                  +{(revenueData?.summary?.todayRegisteredStudents ?? 0)} today
                 </span>
               </div>
             </div>
@@ -1897,10 +1958,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     <Clock className="w-3.5 h-3.5" />
                     Operational Hours: 08:00 AM – 05:30 PM IST
                   </span>
-                  <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 font-bold border border-emerald-300 flex items-center gap-1.5">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    Automatic Server Trigger (Zero Manual Effort)
-                  </span>
+                  {isReportWindowOpen ? (
+                    <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-900 font-black border border-emerald-400 flex items-center gap-1.5 shadow-sm">
+                      <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
+                      Daily Report Window: OPEN (5:30 PM – 6:00 PM IST)
+                    </span>
+                  ) : (
+                    <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-900 font-bold border border-amber-300 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-amber-700" />
+                      Daily Report Window: CLOSED (Accessible 5:30 PM – 6:00 PM IST)
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -1950,6 +2018,24 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               </div>
             )}
           </div>
+
+          {/* Report Window Notification Banner when closed */}
+          {!isReportWindowOpen && !currentDailyReport && (
+            <div className="p-8 rounded-3xl bg-amber-50 border-2 border-amber-300 text-center space-y-3 shadow-sm">
+              <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center mx-auto">
+                <Clock className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-black text-amber-900">
+                Daily Sales Report Window Closed
+              </h3>
+              <p className="text-xs text-amber-800 max-w-lg mx-auto leading-relaxed">
+                {reportWindowMsg || 'Daily Sales Reports and final audit reconciliations are strictly accessible every day between 5:30 PM and 6:00 PM IST (Asia/Kolkata). Outside this 30-minute window, records are permanently secured in the persistent database.'}
+              </p>
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-200/80 text-amber-900 text-xs font-black">
+                <span>Access Window: Daily 5:30 PM – 6:00 PM IST (Asia/Kolkata)</span>
+              </div>
+            </div>
+          )}
 
           {/* Daily Report Content or Loading */}
           {dailyReportLoading && !currentDailyReport ? (

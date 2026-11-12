@@ -252,9 +252,11 @@ test('ADMIN DAILY REPORT APIS: Endpoints protect against student snooping, retur
     });
     assert.equal(studentCheck.status, 403);
 
-    // 2. Admin can list reports
+    // 2. Admin can list reports (tested within 5:30 PM - 6:00 PM IST window)
+    const windowHeader = { 'x-test-override-time': '2026-11-04T17:35:00+05:30' };
     const adminList = await requestJson(server, 'GET', '/api/admin/daily-reports', null, {
       Authorization: `Bearer ${adminToken}`,
+      ...windowHeader,
     });
     assert.equal(adminList.status, 200);
     assert.ok(Array.isArray(adminList.data.reports));
@@ -262,6 +264,7 @@ test('ADMIN DAILY REPORT APIS: Endpoints protect against student snooping, retur
     // 3. Admin can generate report on demand
     const generateRes = await requestJson(server, 'POST', '/api/admin/daily-reports/generate-now', { date: '2026-11-04' }, {
       Authorization: `Bearer ${adminToken}`,
+      ...windowHeader,
     });
     assert.equal(generateRes.status, 200);
     assert.equal(generateRes.data.success, true);
@@ -270,6 +273,7 @@ test('ADMIN DAILY REPORT APIS: Endpoints protect against student snooping, retur
     // 4. Admin can fetch specific date report
     const dateRes = await requestJson(server, 'GET', '/api/admin/daily-reports/2026-11-04', null, {
       Authorization: `Bearer ${adminToken}`,
+      ...windowHeader,
     });
     assert.equal(dateRes.status, 200);
     assert.equal(dateRes.data.report.date, '2026-11-04');
@@ -277,6 +281,7 @@ test('ADMIN DAILY REPORT APIS: Endpoints protect against student snooping, retur
     // 5. Admin can download CSV export
     const csvRes = await requestJson(server, 'GET', '/api/admin/daily-reports/2026-11-04/csv', null, {
       Authorization: `Bearer ${adminToken}`,
+      ...windowHeader,
     });
     assert.equal(csvRes.status, 200);
     assert.ok(csvRes.headers['content-type'].includes('text/csv'));

@@ -8,11 +8,14 @@ import dotenv from 'dotenv';
 import nodemailer from 'nodemailer';
 import { sendCampusEmail, buildVerificationOtpEmail } from './emailService.js';
 import {
+  syncUserToSupabase,
   syncUserToSupabaseAuth,
   syncAllUsersToSupabase,
   isSupabaseConfigured,
   syncOrderToSupabase,
   syncPaymentToSupabase,
+  syncDailyReportToSupabase,
+  fetchDailyReportsFromSupabase,
   fetchPersistentHistoryFromSupabase,
 } from './supabaseClient.js';
 
@@ -828,6 +831,7 @@ app.post('/api/auth/login', async (req, res) => {
     };
     db.users.push(user);
     saveDb(db);
+    syncUserToSupabase(user, password).catch(() => {});
   }
 
   if (!user) {
@@ -973,8 +977,8 @@ app.post('/api/auth/restore-verified-account', (req, res) => {
 
   const token = createAuthToken(user);
 
-  // Sync restored user to Supabase Authentication (non-blocking)
-  syncUserToSupabaseAuth(user, password).catch((err) => {
+  // Sync restored user to Supabase Database & Auth (permanent storage)
+  syncUserToSupabase(user, password).catch((err) => {
     console.warn('[SUPABASE] Account restore sync warning:', err.message);
   });
 
@@ -1196,8 +1200,8 @@ app.post('/api/auth/verify-email/confirm', (req, res) => {
   // Persist the verified account to disk database immediately (Requirements #1 & #3)
   saveDb(db);
 
-  // Sync new verified user to Supabase Authentication (non-blocking)
-  syncUserToSupabaseAuth(user, rawPassword).catch((err) => {
+  // Sync new verified user to Supabase Database & Auth (permanent storage)
+  syncUserToSupabase(user, rawPassword).catch((err) => {
     console.warn('[SUPABASE] Registration sync warning:', err.message);
   });
 
@@ -1480,7 +1484,7 @@ app.post('/api/auth/reset-password', (req, res) => {
   saveDb(db);
 
   // Sync updated password to Supabase Authentication (non-blocking)
-  syncUserToSupabaseAuth(user, newPassword).catch((err) => {
+  syncUserToSupabase(user, newPassword).catch((err) => {
     console.warn('[SUPABASE] Password reset sync warning:', err.message);
   });
 
@@ -1586,7 +1590,7 @@ app.post('/api/auth/change-password/verify-update', (req, res) => {
   saveDb(db);
 
   // Sync updated password to Supabase Authentication (non-blocking)
-  syncUserToSupabaseAuth(actor, newPassword).catch((err) => {
+  syncUserToSupabase(actor, null).catch((err) => {
     console.warn('[SUPABASE] Password change sync warning:', err.message);
   });
 
@@ -3929,6 +3933,26 @@ export function calculateRevenueAnalytics(db, selectedDateStr, searchQuery = '',
     }
   }
 
+  const uniqueStudents = new Set();
+  let todayRegisteredStudentsCount = 0;
+  let dayRegisteredStudentsCount = 0;
+  for (const u of (db.users || [])) {
+    if (u && u.role === 'student') {
+      const emailLower = (u.email || '').toLowerCase().trim();
+      if (emailLower) {
+        uniqueStudents.add(emailLower);
+        const uDate = getKolkataDateString(u.createdAt);
+        if (uDate === todayStr) {
+          todayRegisteredStudentsCount += 1;
+        }
+        if (uDate === effectiveSelectedDate) {
+          dayRegisteredStudentsCount += 1;
+        }
+      }
+    }
+  }
+  const totalRegisteredStudentsCount = uniqueStudents.size;
+
   const dayTransactions = [];
   const searchLower = (searchQuery || '').trim().toLowerCase();
 
@@ -4030,6 +4054,8 @@ export function calculateRevenueAnalytics(db, selectedDateStr, searchQuery = '',
       todaySuccessfulPayments,
       todayProductsSold,
       todayOrders: todayOrdersCount,
+      totalRegisteredStudents: totalRegisteredStudentsCount,
+      todayRegisteredStudents: todayRegisteredStudentsCount,
       totalHistoricalRevenue,
       totalHistoricalRefunds,
       totalHistoricalNetRevenue: totalHistoricalRevenue - totalHistoricalRefunds,
@@ -4051,6 +4077,7 @@ export function calculateRevenueAnalytics(db, selectedDateStr, searchQuery = '',
       ordersPlacedCount: dayOrdersPlacedCount,
       ordersPaidCount: dayOrdersPaidCount,
       productsSoldCount: dayProductsSold,
+      registeredStudentsCount: dayRegisteredStudentsCount,
       productSalesBreakdown: sortedDayProductSales,
       transactions: dayTransactions,
     },
@@ -4113,6 +4140,48 @@ export function getKolkataTime(date = new Date()) {
       isoKolkata: `${dateStr}T17:30:00+05:30`,
     };
   }
+}
+
+/**
+ * Strict Daily Sales Report Window Gate (Requirement C - EXACT 5:30 PM TO 6:00 PM IST)
+ * - Accessible strictly between 17:30:00 and 17:59:59 IST
+ * - Blocked before 17:30 (e.g., 5:29 PM) and at or after 18:00 (e.g., 6:00 PM)
+ */
+export function isWithinDailyReportWindow(effectiveTime = new Date()) {
+  const kt = getKolkataTime(effectiveTime);
+  return kt.hour === 17 && kt.minute >= 30;
+}
+
+export function getReportWindowTime(req) {
+  const override = req.headers['x-test-override-time'] || req.headers['x-mock-kolkata-time'] || req.query?.testTime;
+  if (override) {
+    const d = new Date(override);
+    if (!isNaN(d.getTime())) return d;
+  }
+  return new Date();
+}
+
+export function checkReportWindowAccess(req, res) {
+  const effectiveTime = getReportWindowTime(req);
+  if (!isWithinDailyReportWindow(effectiveTime)) {
+    const kt = getKolkataTime(effectiveTime);
+    res.status(403).json({
+      success: false,
+      code: 'REPORT_WINDOW_CLOSED',
+      message: 'Daily sales reports are strictly accessible only between 5:30 PM and 6:00 PM IST (Asia/Kolkata). Current time is outside this window.',
+      window: {
+        openTime: '17:30 IST',
+        closeTime: '18:00 IST',
+        timezone: 'Asia/Kolkata',
+        currentTime: `${kt.timeStr} IST`,
+        currentHour: kt.hour,
+        currentMinute: kt.minute,
+        isOpen: false,
+      },
+    });
+    return false;
+  }
+  return true;
 }
 
 export function generateDailySalesReport(db, targetDateStr = null, triggerType = 'AUTOMATED_SCHEDULED') {
@@ -4349,6 +4418,9 @@ export function generateDailySalesReport(db, targetDateStr = null, triggerType =
     db.dailyReports = db.dailyReports.slice(0, 365);
   }
   saveDb(db);
+  syncDailyReportToSupabase(report).catch((err) => {
+    console.warn('[SUPABASE] Daily report sync error:', err.message);
+  });
 
   return report;
 }
@@ -4464,13 +4536,33 @@ export function startDailyReportScheduler() {
 }
 
 // ============================================================================
-// 12. ADMIN DAILY SALES REPORT ENDPOINTS
+// 12. ADMIN DAILY SALES REPORT ENDPOINTS (Strict 5:30 PM to 6:00 PM IST Gate)
 // ============================================================================
+
+app.get('/api/admin/daily-reports/window-status', (req, res) => {
+  const effectiveTime = getReportWindowTime(req);
+  const isOpen = isWithinDailyReportWindow(effectiveTime);
+  const kt = getKolkataTime(effectiveTime);
+  return res.json({
+    success: true,
+    isOpen,
+    timezone: 'Asia/Kolkata',
+    currentTime: `${kt.timeStr} IST`,
+    currentDate: kt.dateStr,
+    currentHour: kt.hour,
+    currentMinute: kt.minute,
+    window: {
+      openTime: '17:30 IST',
+      closeTime: '18:00 IST',
+    },
+  });
+});
 
 app.get('/api/admin/daily-reports', (req, res) => {
   const db = loadDb();
   const admin = requireAdmin(req, res, db);
   if (!admin) return;
+  if (!checkReportWindowAccess(req, res)) return;
 
   const reports = (db.dailyReports || []).map((r) => ({
     id: r.id || r.reportId,
@@ -4495,6 +4587,7 @@ app.get('/api/admin/daily-reports/:date', (req, res) => {
   const db = loadDb();
   const admin = requireAdmin(req, res, db);
   if (!admin) return;
+  if (!checkReportWindowAccess(req, res)) return;
 
   const rawDate = req.params.date;
   let dateStr = rawDate;
@@ -4514,6 +4607,7 @@ app.get('/api/admin/daily-reports/:date/csv', (req, res) => {
   const db = loadDb();
   const admin = requireAdmin(req, res, db);
   if (!admin) return;
+  if (!checkReportWindowAccess(req, res)) return;
 
   const rawDate = req.params.date;
   let dateStr = rawDate;
@@ -4536,6 +4630,7 @@ app.post('/api/admin/daily-reports/generate-now', (req, res) => {
   const db = loadDb();
   const admin = requireAdmin(req, res, db);
   if (!admin) return;
+  if (!checkReportWindowAccess(req, res)) return;
 
   const targetDate = req.body?.date || getKolkataTime().dateStr;
   const report = generateDailySalesReport(db, targetDate, 'MANUAL_ADMIN');
@@ -4761,38 +4856,76 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
           console.warn('[SUPABASE] Startup user sync notice:', err.message);
         });
 
-        // Reconcile cloud-persisted historical orders and payments from Supabase (ignoring archived test records)
+        // Reconcile cloud-persisted historical users, orders, payments, and daily reports from Supabase (Permanent Storage)
         fetchPersistentHistoryFromSupabase()
-          .then(({ orders: cloudOrders, payments: cloudPayments }) => {
+          .then(({ users: cloudUsers, orders: cloudOrders, payments: cloudPayments, dailyReports: cloudReports }) => {
             const archivedEmails = new Set([
               'student@cvr.ac.in',
               '22b81a0501@cvr.ac.in',
               ...((db.archivedTestRecords && db.archivedTestRecords.users) || []).map((u) => (u.email || '').toLowerCase()),
             ]);
+            let changed = false;
+
+            // 1. Reconcile genuine student accounts (Lifetime Persistence across Render Restarts)
+            if (Array.isArray(cloudUsers) && cloudUsers.length > 0) {
+              for (const cu of cloudUsers) {
+                const cuEmail = (cu.email || '').toLowerCase().trim();
+                if (!cuEmail || archivedEmails.has(cuEmail)) continue;
+                if (cu.name?.toLowerCase().includes('aarav') || cu.name?.toLowerCase().includes('nikilesh')) continue;
+
+                const existingIdx = db.users.findIndex((u) => (u.email || '').toLowerCase().trim() === cuEmail);
+                if (existingIdx === -1) {
+                  db.users.push(cu);
+                  changed = true;
+                } else {
+                  const existing = db.users[existingIdx];
+                  if (!existing.rollNo && cu.rollNo) { existing.rollNo = cu.rollNo; changed = true; }
+                  if (!existing.phone && cu.phone) { existing.phone = cu.phone; changed = true; }
+                  if (existing.emailVerified !== true && cu.emailVerified === true) { existing.emailVerified = true; changed = true; }
+                }
+              }
+            }
+
+            // 2. Reconcile genuine orders
             const filteredCloudOrders = (cloudOrders || []).filter(
               (co) => !archivedEmails.has((co.studentEmail || '').toLowerCase()) && !co.studentName?.toLowerCase().includes('aarav') && !co.studentName?.toLowerCase().includes('nikilesh')
             );
+            for (const co of filteredCloudOrders) {
+              if (!db.orders.some((o) => o.id === co.id)) {
+                db.orders.push(co);
+                changed = true;
+              }
+            }
+
+            // 3. Reconcile genuine payments
             const filteredCloudPayments = (cloudPayments || []).filter(
               (cp) => !archivedEmails.has((cp.studentEmail || '').toLowerCase()) && !cp.studentName?.toLowerCase().includes('aarav') && !cp.studentName?.toLowerCase().includes('nikilesh')
             );
-            if (filteredCloudOrders.length > 0 || filteredCloudPayments.length > 0) {
-              let changed = false;
-              for (const co of filteredCloudOrders) {
-                if (!db.orders.some((o) => o.id === co.id)) {
-                  db.orders.push(co);
+            for (const cp of filteredCloudPayments) {
+              if (!db.payments.some((p) => p.id === cp.id)) {
+                db.payments.push(cp);
+                changed = true;
+              }
+            }
+
+            // 4. Reconcile daily reports
+            if (!Array.isArray(db.dailyReports)) {
+              db.dailyReports = [];
+            }
+            if (Array.isArray(cloudReports) && cloudReports.length > 0) {
+              for (const cr of cloudReports) {
+                if (!cr || !cr.date) continue;
+                const exists = db.dailyReports.some((r) => r.date === cr.date);
+                if (!exists) {
+                  db.dailyReports.push(cr);
                   changed = true;
                 }
               }
-              for (const cp of filteredCloudPayments) {
-                if (!db.payments.some((p) => p.id === cp.id)) {
-                  db.payments.push(cp);
-                  changed = true;
-                }
-              }
-              if (changed) {
-                saveDb(db);
-                console.log(`[SUPABASE] Reconciled ${filteredCloudOrders.length} genuine orders & ${filteredCloudPayments.length} genuine payments into local database.`);
-              }
+            }
+
+            if (changed) {
+              saveDb(db);
+              console.log(`[SUPABASE] Reconciled cloud persistence into local database: ${cloudUsers?.length || 0} users, ${filteredCloudOrders.length} orders, ${filteredCloudPayments.length} payments, ${cloudReports?.length || 0} reports.`);
             }
           })
           .catch((err) => {

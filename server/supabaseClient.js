@@ -49,9 +49,8 @@ export async function syncUserToSupabaseAuth(user, rawPassword = null) {
   };
 
   try {
-    // 1. If user already exists in Supabase Auth, update metadata (and password if provided)
     if (client.auth && client.auth.admin) {
-      const { data: listData, error: listError } = await client.auth.admin.listUsers({ page: 1, perPage: 1000 }).catch((e) => ({ error: e }));
+      const { data: listData } = await client.auth.admin.listUsers({ page: 1, perPage: 1000 }).catch(() => ({ data: null }));
       const existing = listData?.users?.find((u) => u.email?.toLowerCase() === email);
 
       if (existing) {
@@ -74,7 +73,7 @@ export async function syncUserToSupabaseAuth(user, rawPassword = null) {
         return updateData?.user || existing;
       }
 
-      // 2. User does not exist in Supabase Auth yet: create new user
+      // User does not exist in Supabase Auth yet: create new user
       const createPayload = {
         email,
         email_confirm: true,
@@ -83,7 +82,6 @@ export async function syncUserToSupabaseAuth(user, rawPassword = null) {
       if (rawPassword && rawPassword.length >= 6) {
         createPayload.password = rawPassword;
       } else {
-        // Generate temporary secure hash placeholder password if plain password not available during bulk sync
         createPayload.password = `NestyAuth_${Math.random().toString(36).slice(2, 10)}!${Date.now()}`;
       }
 
@@ -99,23 +97,99 @@ export async function syncUserToSupabaseAuth(user, rawPassword = null) {
 
     return null;
   } catch (err) {
-    console.warn(`[SUPABASE] Non-fatal sync error for ${email}:`, err.message);
+    console.warn(`[SUPABASE] Non-fatal auth sync error for ${email}:`, err.message);
     return null;
   }
 }
 
 /**
- * Background synchronizer for all existing users in the local database.
- * Runs non-blockingly so server startup is instantaneous.
+ * Persists a user account permanently to the public.users database table.
+ * Also syncs to Supabase Auth.
+ */
+export async function syncUserToSupabase(user, rawPassword = null) {
+  const client = getSupabaseClient();
+  if (!user || !user.email) return null;
+
+  const email = user.email.toLowerCase().trim();
+  const rollNo = user.rollNo || '';
+
+  // 1. Sync to public.users table if client is configured
+  if (client) {
+    try {
+      const payload = {
+        id: user.id,
+        email,
+        name: user.name || '',
+        phone: user.phone || '',
+        roll_no: rollNo,
+        role: user.role || 'student',
+        email_verified: Boolean(user.emailVerified !== false),
+        password_hash: user.passwordHash || '',
+        created_at: user.createdAt || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await client.from('users').upsert(payload, { onConflict: 'id' });
+      if (error) {
+        console.warn(`[SUPABASE] User table upsert notice for ${email}:`, error.message);
+      } else {
+        console.log(`[SUPABASE] User successfully persisted to public.users table: ${email} (${rollNo})`);
+      }
+    } catch (err) {
+      console.warn(`[SUPABASE] Non-fatal user table sync error for ${email}:`, err.message);
+    }
+  }
+
+  // 2. Also sync to Supabase Auth
+  try {
+    await syncUserToSupabaseAuth(user, rawPassword);
+  } catch {
+    // Non-fatal
+  }
+
+  return true;
+}
+
+/**
+ * Fetches all persistent users from the public.users Supabase table.
+ */
+export async function fetchUsersFromSupabase() {
+  const client = getSupabaseClient();
+  if (!client) return [];
+  try {
+    const { data, error } = await client.from('users').select('*');
+    if (error) {
+      console.warn('[SUPABASE] Failed to query users table:', error.message);
+      return [];
+    }
+    return (data || []).map((u) => ({
+      id: u.id,
+      email: (u.email || '').toLowerCase().trim(),
+      name: u.name || '',
+      phone: u.phone || '',
+      rollNo: u.roll_no || '',
+      role: u.role || 'student',
+      emailVerified: Boolean(u.email_verified !== false),
+      passwordHash: u.password_hash || '',
+      createdAt: u.created_at || new Date().toISOString(),
+    }));
+  } catch (err) {
+    console.warn('[SUPABASE] Unexpected error querying users table:', err.message);
+    return [];
+  }
+}
+
+/**
+ * Synchronizes all local users to Supabase public.users table and Auth.
  */
 export async function syncAllUsersToSupabase(users = []) {
   if (!isSupabaseConfigured() || !Array.isArray(users) || users.length === 0) {
     return;
   }
-  console.log(`[SUPABASE] Syncing ${users.length} existing users to Supabase Authentication...`);
+  console.log(`[SUPABASE] Syncing ${users.length} existing users to Supabase database & auth...`);
   for (const u of users) {
     try {
-      await syncUserToSupabaseAuth(u, null);
+      await syncUserToSupabase(u, null);
     } catch {
       // Ignore individual sync errors
     }
@@ -124,8 +198,7 @@ export async function syncAllUsersToSupabase(users = []) {
 }
 
 /**
- * Persist an order to Supabase table (if configured and table exists).
- * Non-blocking, failsafe.
+ * Persist an order to Supabase orders table permanently.
  */
 export async function syncOrderToSupabase(order) {
   const client = getSupabaseClient();
@@ -139,12 +212,10 @@ export async function syncOrderToSupabase(order) {
       student_name: order.studentName,
       student_phone: order.studentPhone,
       student_roll_no: rollNo,
-      roll_no: rollNo,
-      token: singleToken,
-      items: order.items,
+      items: order.items || [],
       total_amount: order.totalAmount,
-      discount: order.discount,
-      final_amount: order.finalAmount,
+      discount: order.discount || 0,
+      final_amount: order.finalAmount || order.totalAmount,
       payment_method: order.paymentMethod,
       transaction_id: order.transactionId,
       razorpay_order_id: order.razorpayOrderId,
@@ -154,6 +225,7 @@ export async function syncOrderToSupabase(order) {
       bill_collected_at: order.billCollectedAt || null,
       pickup_token: singleToken,
       bill_code: singleToken,
+      token: singleToken,
       printed_at: order.printedAt || null,
       printed_by: order.printedBy || null,
       claimed_by: order.claimedBy || null,
@@ -163,6 +235,8 @@ export async function syncOrderToSupabase(order) {
     const { error } = await client.from('orders').upsert(payload, { onConflict: 'id' });
     if (error) {
       console.warn(`[SUPABASE] Order upsert notice for #${order.id}:`, error.message);
+    } else {
+      console.log(`[SUPABASE] Order #${order.id} permanently persisted.`);
     }
     return true;
   } catch (err) {
@@ -172,8 +246,7 @@ export async function syncOrderToSupabase(order) {
 }
 
 /**
- * Persist a payment to Supabase table (if configured and table exists).
- * Non-blocking, failsafe.
+ * Persist a payment to Supabase payments table permanently.
  */
 export async function syncPaymentToSupabase(payment) {
   const client = getSupabaseClient();
@@ -187,7 +260,6 @@ export async function syncPaymentToSupabase(payment) {
       student_email: payment.studentEmail,
       student_name: payment.studentName,
       student_roll_no: rollNo,
-      roll_no: rollNo,
       token: singleToken,
       amount: payment.amount,
       currency: payment.currency || 'INR',
@@ -195,6 +267,8 @@ export async function syncPaymentToSupabase(payment) {
       transaction_id: payment.transactionId,
       razorpay_order_id: payment.razorpayOrderId,
       status: payment.status,
+      refund_status: payment.refundStatus || 'NONE',
+      refund_amount: Number(payment.refundAmount) || 0,
       bill_status: payment.billStatus || 'ACTIVE',
       bill_collected_at: payment.billCollectedAt || null,
       created_at: payment.createdAt,
@@ -202,6 +276,8 @@ export async function syncPaymentToSupabase(payment) {
     const { error } = await client.from('payments').upsert(payload, { onConflict: 'id' });
     if (error) {
       console.warn(`[SUPABASE] Payment upsert notice for ${payment.id}:`, error.message);
+    } else {
+      console.log(`[SUPABASE] Payment ${payment.id} permanently persisted.`);
     }
     return true;
   } catch (err) {
@@ -211,23 +287,114 @@ export async function syncPaymentToSupabase(payment) {
 }
 
 /**
- * Load cloud-persisted historical orders and payments from Supabase on startup.
+ * Persist a Daily Sales Report to Supabase daily_reports table permanently.
+ */
+export async function syncDailyReportToSupabase(report) {
+  const client = getSupabaseClient();
+  if (!client || !report || !report.date) return null;
+  try {
+    const payload = {
+      id: report.reportId || report.id || `report_${report.date}`,
+      date: report.date,
+      report_id: report.reportId || report.id || `report_${report.date}`,
+      generated_at: report.generatedAt || new Date().toISOString(),
+      kolkata_timestamp: report.kolkataTimestamp || '',
+      trigger_type: report.triggerType || 'AUTOMATIC_530_PM',
+      revenue_summary: report.revenueSummary || {},
+      product_sales: report.productSales || [],
+      order_ledger: report.orderLedger || {},
+      final_totals: report.finalTotals || {},
+      business_summary: report.businessSummary || {},
+      full_report_json: report,
+      created_at: report.generatedAt || new Date().toISOString(),
+    };
+    const { error } = await client.from('daily_reports').upsert(payload, { onConflict: 'date' });
+    if (error) {
+      console.warn(`[SUPABASE] Daily report upsert notice for ${report.date}:`, error.message);
+    } else {
+      console.log(`[SUPABASE] Daily report for ${report.date} permanently persisted.`);
+    }
+    return true;
+  } catch (err) {
+    console.warn(`[SUPABASE] Non-fatal daily report sync error for ${report.date}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * Fetches all persistent daily reports from Supabase.
+ */
+export async function fetchDailyReportsFromSupabase() {
+  const client = getSupabaseClient();
+  if (!client) return [];
+  try {
+    const { data, error } = await client.from('daily_reports').select('*');
+    if (error) {
+      console.warn('[SUPABASE] Failed to query daily_reports table:', error.message);
+      return [];
+    }
+    return (data || []).map((r) => {
+      if (r.full_report_json && typeof r.full_report_json === 'object' && r.full_report_json.reportId) {
+        return r.full_report_json;
+      }
+      return {
+        id: r.id || r.report_id,
+        reportId: r.report_id || r.id,
+        date: r.date,
+        generatedAt: r.generated_at,
+        kolkataTimestamp: r.kolkata_timestamp,
+        triggerType: r.trigger_type,
+        revenueSummary: r.revenue_summary,
+        productSales: r.product_sales,
+        orderLedger: r.order_ledger,
+        finalTotals: r.final_totals,
+        businessSummary: r.business_summary,
+      };
+    });
+  } catch (err) {
+    console.warn('[SUPABASE] Unexpected error querying daily_reports table:', err.message);
+    return [];
+  }
+}
+
+/**
+ * Load cloud-persisted historical users, orders, payments, and daily reports from Supabase on startup.
  */
 export async function fetchPersistentHistoryFromSupabase() {
   const client = getSupabaseClient();
-  if (!client) return { orders: [], payments: [] };
+  if (!client) return { users: [], orders: [], payments: [], dailyReports: [] };
   try {
-    const [ordRes, pmtRes] = await Promise.all([
+    const [usrRes, ordRes, pmtRes, repRes] = await Promise.all([
+      client.from('users').select('*').catch((e) => ({ error: e, data: null })),
       client.from('orders').select('*').catch((e) => ({ error: e, data: null })),
       client.from('payments').select('*').catch((e) => ({ error: e, data: null })),
+      client.from('daily_reports').select('*').catch((e) => ({ error: e, data: null })),
     ]);
 
+    if (usrRes?.error) {
+      console.warn('[SUPABASE] Failed to query users table:', usrRes.error.message);
+    }
     if (ordRes?.error) {
       console.warn('[SUPABASE] Failed to query orders table:', ordRes.error.message);
     }
     if (pmtRes?.error) {
       console.warn('[SUPABASE] Failed to query payments table:', pmtRes.error.message);
     }
+    if (repRes?.error) {
+      console.warn('[SUPABASE] Failed to query daily_reports table:', repRes.error.message);
+    }
+
+    const users = (usrRes?.data || []).map((u) => ({
+      id: u.id,
+      email: (u.email || '').toLowerCase().trim(),
+      name: u.name || '',
+      phone: u.phone || '',
+      rollNo: u.roll_no || '',
+      role: u.role || 'student',
+      emailVerified: Boolean(u.email_verified !== false),
+      passwordHash: u.password_hash || '',
+      createdAt: u.created_at || new Date().toISOString(),
+    }));
 
     const orders = (ordRes?.data || []).map((o) => {
       const singleToken = o.token || o.bill_code || o.pickup_token || null;
@@ -277,6 +444,8 @@ export async function fetchPersistentHistoryFromSupabase() {
         transactionId: p.transaction_id,
         razorpayOrderId: p.razorpay_order_id,
         status: p.status,
+        refundStatus: p.refund_status || 'NONE',
+        refundAmount: Number(p.refund_amount) || 0,
         billStatus: p.bill_status || 'ACTIVE',
         billCollectedAt: p.bill_collected_at,
         token: singleToken,
@@ -285,9 +454,28 @@ export async function fetchPersistentHistoryFromSupabase() {
       };
     });
 
-    return { orders, payments };
+    const dailyReports = (repRes?.data || []).map((r) => {
+      if (r.full_report_json && typeof r.full_report_json === 'object' && r.full_report_json.reportId) {
+        return r.full_report_json;
+      }
+      return {
+        id: r.id || r.report_id,
+        reportId: r.report_id || r.id,
+        date: r.date,
+        generatedAt: r.generated_at,
+        kolkataTimestamp: r.kolkata_timestamp,
+        triggerType: r.trigger_type,
+        revenueSummary: r.revenue_summary,
+        productSales: r.product_sales,
+        orderLedger: r.order_ledger,
+        finalTotals: r.final_totals,
+        businessSummary: r.business_summary,
+      };
+    });
+
+    return { users, orders, payments, dailyReports };
   } catch (err) {
     console.warn('[SUPABASE] Unexpected error in fetchPersistentHistoryFromSupabase:', err.message);
-    return { orders: [], payments: [] };
+    return { users: [], orders: [], payments: [], dailyReports: [] };
   }
 }
